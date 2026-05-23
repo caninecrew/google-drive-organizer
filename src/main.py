@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .auth import get_credentials, get_drive_activity_service, get_drive_service, get_sheets_service
 from .auto_approve import auto_approve_safe
+from .auto_approve import fill_destinations
 from .config import load_config
 from .drive_inventory import inventory_files
 from .folder_setup import FOLDER_PATHS, ensure_folder_path
@@ -157,6 +158,30 @@ def cmd_auto_approve_safe(args):
     print(f"  plan CSV: {result['plan_path']}")
 
 
+def cmd_fill_destinations(args):
+    config = load_config()
+    creds = get_credentials()
+    sheets = get_sheets_service(creds)
+    result = fill_destinations(
+        sheets,
+        args.spreadsheet_id,
+        config.log_dir,
+        args.dry_run,
+    )
+    print("Fill destinations summary:")
+    print(f"  total rows evaluated: {result['total_rows']}")
+    print(f"  rows that would get final_destination filled: {result['filled_count']}")
+    print(f"  rows already had final_destination: {result['already_filled_count']}")
+    print(f"  rows still blank: {result['still_blank_count']}")
+    print("  top destination counts:")
+    for destination, count in result["top_destinations"]:
+        print(f"    {destination}: {count}")
+    print("  top skip reasons:")
+    for reason, count in result["top_reasons"]:
+        print(f"    {reason}: {count}")
+    print(f"  plan CSV: {result['plan_path']}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="google-drive-organizer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +198,9 @@ def build_parser():
     auto.add_argument("--spreadsheet-id", required=True)
     auto.add_argument("--dry-run", action="store_true")
     auto.add_argument("--max-approve", type=int)
+    fill = sub.add_parser("fill-destinations")
+    fill.add_argument("--spreadsheet-id", required=True)
+    fill.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -189,6 +217,8 @@ def main():
         cmd_move_approved(args)
     elif args.command == "auto-approve-safe":
         cmd_auto_approve_safe(args)
+    elif args.command == "fill-destinations":
+        cmd_fill_destinations(args)
 
 
 if __name__ == "__main__":

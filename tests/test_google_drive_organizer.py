@@ -4,7 +4,7 @@ import csv
 import os
 from pathlib import Path
 
-from src.auto_approve import auto_approve_safe
+from src.auto_approve import auto_approve_safe, fill_destinations
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import inventory_files
@@ -1076,6 +1076,215 @@ def test_auto_approve_never_changes_final_destination(tmp_path):
     )
     auto_approve_safe(sheets, "sheet-1", str(tmp_path), False, None)
     assert all("final_destination" not in call["range"] for call in sheets.update_calls)
+
+
+def test_blank_final_destination_gets_filled_from_valid_suggested_destination(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-20",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    assert result["filled_count"] == 1
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "03 Work and Career"
+    assert rows[0]["review_decision_planned"] == "REVIEW"
+
+
+def test_existing_final_destination_is_preserved(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-21",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    assert result["already_filled_count"] == 1
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "03 Work and Career"
+    assert rows[0]["reason"] == "existing final_destination preserved"
+
+
+def test_scouting_media_goes_to_scouting_photos_when_role_first(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-22",
+                "name": "Camp photo.jpg",
+                "current_path": "My Drive/Scouting/Boxwell/Camp photo.jpg",
+                "mime_type": "image/jpeg",
+                "suggested_role": "Scouting",
+                "suggested_destination": "04 Scouting",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "04 Scouting/Photos"
+
+
+def test_family_history_videos_go_to_personal_family_history(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-23",
+                "name": "Family History Videos",
+                "current_path": "My Drive/Personal/Family History Videos",
+                "mime_type": "video/mp4",
+                "suggested_role": "Personal",
+                "suggested_destination": "01 Personal",
+                "suggested_confidence": "Medium",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "01 Personal/Family History/Video Interviews"
+
+
+def test_generic_media_goes_to_photos_and_media(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-24",
+                "name": "vacation.jpg",
+                "current_path": "My Drive/Random/vacation.jpg",
+                "mime_type": "image/jpeg",
+                "suggested_role": "Review Later",
+                "suggested_destination": "99 Review Later",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "08 Photos and Media"
+
+
+def test_fill_destinations_does_not_set_approve_move(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-25",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["review_decision_planned"] == "REVIEW"
+    assert rows[0]["review_decision_planned"] != "APPROVE_MOVE"
+
+
+def test_fill_destinations_dry_run_does_not_write_to_sheets(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-26",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    assert sheets.update_calls == []
+
+
+def test_rows_without_safe_destination_remain_blank(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-27",
+                "name": "unknown item",
+                "current_path": "My Drive/Random/unknown item",
+                "mime_type": "application/octet-stream",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == ""
+    assert rows[0]["reason"] == "no safe destination"
+
+
+def test_fill_destinations_does_not_change_suggested_destination(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-28",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    fill_destinations(sheets, "sheet-1", str(tmp_path), True)
+    assert sheets.update_calls == []
 
 
 class FakeDriveFiles:

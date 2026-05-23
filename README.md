@@ -101,6 +101,8 @@ In the review sheet:
 Safe bulk approval workflow:
 
 ```bash
+python -m src.main fill-destinations --spreadsheet-id SPREADSHEET_ID --dry-run
+python -m src.main fill-destinations --spreadsheet-id SPREADSHEET_ID
 python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --dry-run --max-approve 10
 python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --max-approve 10
 python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
@@ -109,13 +111,16 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 Recommended steps:
 
 1. Run inventory.
-2. Review the summary.
-3. Run `auto-approve-safe` with `--dry-run --max-approve 10`.
-4. Run `auto-approve-safe` with `--max-approve 10`.
-5. Run `move-approved --dry-run`.
-6. Review the move plan CSV.
-7. Run a real move only for that tiny approved batch.
-8. Increase the batch size gradually after reviewing each pass.
+2. Run `fill-destinations --dry-run`.
+3. Review the fill destination plan CSV.
+4. Run `fill-destinations`.
+5. Review the summary.
+6. Run `auto-approve-safe --dry-run --max-approve 10`.
+7. Run `auto-approve-safe --max-approve 10`.
+8. Run `move-approved --dry-run`.
+9. Review the move plan CSV.
+10. Run a real move only for that tiny approved batch.
+11. Increase the batch size gradually after reviewing each pass.
 
 Summarize an exported inventory CSV before moving:
 
