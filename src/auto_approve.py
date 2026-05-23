@@ -467,7 +467,7 @@ def bulk_prepare_safe(
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     plan_path = Path(log_dir) / f"bulk_prepare_safe_plan_{timestamp}.csv"
     plan_rows = []
-    updates = []
+    batch_updates = []
     total_rows = 0
     filled_count = 0
     approve_count = 0
@@ -490,15 +490,16 @@ def bulk_prepare_safe(
     if headers and "final_destination" in headers:
         destination_column = _column_letter(headers.index("final_destination"))
 
-    safe_seen = 0
+    approved_seen = 0
     for row in rows:
         total_rows += 1
         current_final = row.get("final_destination", "").strip()
         current_review = row.get("review_decision", "").strip()
-        planned_final, destination_reason = _planned_destination_for_bulk(row)
-        if not current_final and planned_final:
+        planned_destination, destination_reason = _planned_destination_for_bulk(row)
+        planned_final = current_final or planned_destination
+        if not current_final and planned_destination:
             filled_count += 1
-            destination_counts[planned_final] += 1
+            destination_counts[planned_destination] += 1
         owned_by_me = _truthy(row.get("owned_by_me", ""))
         if owned_by_me:
             owned_true_count += 1
@@ -519,38 +520,58 @@ def bulk_prepare_safe(
             owned_only,
             shared_file_strategy,
         )
-        planned_review = current_review
         reason_parts = [destination_reason] if destination_reason else []
-        if safe and (limit is None or safe_seen < limit):
+        if safe and (limit is None or approved_seen < limit):
             planned_review = "APPROVE_MOVE"
-            approve_count += 1
-            safe_seen += 1
-            if current_review == "APPROVE_MOVE" and current_final == planned_final:
-                unchanged_count += 1
-            elif not dry_run:
-                updates.append((row["_row_number"], planned_final, planned_review))
-                planned_update_ranges += (1 if planned_final and planned_final != current_final else 0) + (1 if planned_review != current_review else 0)
+            approved_seen += 1
+            reason_parts.append("safe")
+        elif safe:
+            planned_review = current_review
+            reason_parts.append("max approvals reached")
         else:
+            planned_review = "NEEDS_REVIEW" if current_review != "NEEDS_REVIEW" else current_review
             reason_parts.extend(approval_reasons)
-            if current_review != "NEEDS_REVIEW":
-                planned_review = "NEEDS_REVIEW"
-                if not dry_run:
-                    updates.append((row["_row_number"], planned_final, planned_review))
-                    planned_update_ranges += (1 if planned_final and planned_final != current_final else 0) + 1
-            needs_review_count += 1
-            if not safe and "not owned by me" in approval_reasons and len(approval_reasons) == 1:
+            if "not owned by me" in approval_reasons and len(approval_reasons) == 1:
                 blocked_only_by_not_owned += 1
             if "low confidence" in approval_reasons:
                 blocked_by_low_confidence += 1
             if "non-normal sensitivity" in approval_reasons:
                 blocked_by_sensitivity += 1
-            if safe:
-                reason_parts = ["max limit reached"]
-        if current_final and current_final == planned_final and current_review == planned_review:
+
+        destination_changed = not current_final and bool(planned_destination)
+        review_changed = planned_review != current_review
+
+        if planned_review == "APPROVE_MOVE":
+            approve_count += 1
+        elif planned_review == "NEEDS_REVIEW":
+            needs_review_count += 1
+        else:
             unchanged_count += 1
-        reason = "; ".join([part for part in reason_parts if part])
-        if not reason:
-            reason = "safe"
+
+        if not destination_changed and not review_changed:
+            reason = "unchanged"
+        else:
+            reason = "; ".join([part for part in reason_parts if part]) or "safe"
+
+        if not current_final and planned_destination:
+            final_destination_planned = planned_destination
+        else:
+            final_destination_planned = current_final
+
+        if destination_changed and destination_column and not dry_run:
+            batch_updates.append(
+                {"range": f"Sheet1!{destination_column}{row['_row_number']}", "values": [[planned_destination]]}
+            )
+        if review_changed and review_column and not dry_run:
+            batch_updates.append(
+                {"range": f"Sheet1!{review_column}{row['_row_number']}", "values": [[planned_review]]}
+            )
+
+        if destination_changed or review_changed:
+            if destination_changed:
+                planned_update_ranges += 1
+            if review_changed:
+                planned_update_ranges += 1
         plan_rows.append(
             {
                 "file_id": row.get("file_id", ""),
@@ -564,22 +585,16 @@ def bulk_prepare_safe(
                 "owned_by_me": row.get("owned_by_me", ""),
                 "is_shortcut": row.get("is_shortcut", ""),
                 "final_destination_current": current_final,
-                "final_destination_planned": planned_final,
+                "final_destination_planned": final_destination_planned,
                 "review_decision_current": current_review,
                 "review_decision_planned": planned_review,
                 "reason": reason,
             }
         )
-        reasons.update(reason_parts if reason_parts else [reason])
+        reasons.update([part for part in reason_parts if part] or [reason])
         planned_reason_rows.append(reason)
     _write_bulk_plan_csv(plan_path, plan_rows)
-    batch_updates = []
     if not dry_run:
-        for row_number, destination, review_decision in updates:
-            if destination_column and destination:
-                batch_updates.append({"range": f"Sheet1!{destination_column}{row_number}", "values": [[destination]]})
-            if review_column:
-                batch_updates.append({"range": f"Sheet1!{review_column}{row_number}", "values": [[review_decision]]})
         _sheet_batch_update_values(sheets_service, spreadsheet_id, batch_updates)
     return {
         "total_rows": total_rows,
@@ -596,7 +611,7 @@ def bulk_prepare_safe(
         "top_destinations": destination_counts.most_common(5),
         "top_reasons": reasons.most_common(5),
         "plan_path": plan_path,
-        "updated_rows": len(updates),
+        "updated_rows": len(batch_updates),
         "planned_update_ranges": planned_update_ranges,
-        "batch_calls_sent": 1 if batch_updates else 0,
+        "batch_calls_sent": 1 if (batch_updates and not dry_run) else 0,
     }

@@ -201,8 +201,12 @@ def cmd_bulk_prepare_safe(args):
     print("Bulk prepare summary:")
     print(f"  total rows evaluated: {result['total_rows']}")
     print(f"  rows that would get final_destination filled: {result['filled_count']}")
-    print(f"  rows that would be marked APPROVE_MOVE: {result['approve_count']}")
-    print(f"  rows that would be marked NEEDS_REVIEW: {result['needs_review_count']}")
+    if args.dry_run:
+        print(f"  rows that would be marked APPROVE_MOVE: {result['approve_count']}")
+        print(f"  rows that would be marked NEEDS_REVIEW: {result['needs_review_count']}")
+    else:
+        print(f"  rows marked APPROVE_MOVE: {result['approve_count']}")
+        print(f"  rows marked NEEDS_REVIEW: {result['needs_review_count']}")
     print(f"  rows left unchanged: {result['unchanged_count']}")
     print(f"  owned_by_me TRUE count: {result['owned_true_count']}")
     print(f"  owned_by_me FALSE count: {result['owned_false_count']}")

@@ -1336,7 +1336,7 @@ def test_safe_bulk_prepare_marks_safe_row_approve_move(tmp_path):
         rows = list(csv.DictReader(f))
     assert rows[0]["final_destination_planned"] == "03 Work and Career"
     assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
-    assert rows[0]["reason"] in {"safe", "suggested_destination", "existing final_destination preserved"}
+    assert rows[0]["reason"] == "suggested_destination; safe"
 
 
 def test_bulk_prepare_shared_skip_blocks_not_owned_rows(tmp_path):
@@ -1590,6 +1590,42 @@ def test_bulk_prepare_existing_final_destination_is_preserved(tmp_path):
         rows = list(csv.DictReader(f))
     assert rows[0]["final_destination_planned"] == "03 Work and Career"
     assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
+    assert result["planned_update_ranges"] == 1
+
+
+def test_bulk_prepare_updates_review_when_final_destination_already_exists(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-37b",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), False)
+    assert len(sheets.batch_update_calls) == 1
+    assert result["batch_calls_sent"] == 1
+    assert result["planned_update_ranges"] == 1
+    assert result["updated_rows"] == 1
+    call = sheets.batch_update_calls[0]["body"]["data"]
+    assert any(item["range"].startswith("Sheet1!") for item in call)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "03 Work and Career"
+    assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
 
 
 def test_bulk_prepare_media_rules_apply(tmp_path):
@@ -1696,6 +1732,47 @@ def test_bulk_prepare_uses_batch_updates(tmp_path):
     result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), False)
     assert len(sheets.batch_update_calls) == 1
     assert result["batch_calls_sent"] == 1
+    assert result["planned_update_ranges"] == 2
+
+
+def test_bulk_prepare_counts_do_not_exceed_total_rows(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-44a",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            },
+            {
+                "file_id": "file-44b",
+                "name": "Untitled document",
+                "current_path": "Unknown Parent/Untitled document",
+                "mime_type": "application/vnd.google-apps.document",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Needs Sensitive Review",
+                "owned_by_me": "False",
+                "is_shortcut": "True",
+                "final_destination": "",
+                "review_decision": "",
+            },
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    assert result["approve_count"] + result["needs_review_count"] + result["unchanged_count"] == result["total_rows"]
 
 
 def test_bulk_prepare_writes_semicolon_risk_reasons(tmp_path):
