@@ -40,6 +40,7 @@ def cmd_inventory(args):
             "suggested_role",
             "suggested_sensitivity",
             "suggested_destination",
+            "suggested_confidence",
             "activity_level",
             "last_activity_time",
             "last_activity_type",

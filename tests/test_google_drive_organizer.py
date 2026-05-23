@@ -1,24 +1,59 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.move_approved import move_approved_rows
 
 
 def test_classifier_role_matching():
-    role, sensitivity, destination = classify_file("TTU transcript.pdf", "application/pdf")
+    role, sensitivity, destination, confidence = classify_file("TTU transcript.pdf", "application/pdf")
     assert role == "School and Education"
     assert destination == "02 School and Education"
     assert sensitivity == "School Record"
+    assert confidence == "High"
 
 
 def test_classifier_sensitivity_detection():
-    role, sensitivity, destination = classify_file("social security card scan.png", "image/png")
+    role, sensitivity, destination, confidence = classify_file("social security card scan.png", "image/png")
     assert role == "Photos and Media"
     assert sensitivity == "Needs Sensitive Review"
     assert destination == "08 Photos and Media"
+    assert confidence == "High"
+
+
+def test_resume_still_goes_to_work():
+    role, sensitivity, destination, confidence = classify_file(
+        "resume_final.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    assert role == "Work and Career"
+    assert destination == "03 Work and Career"
+    assert confidence == "High"
+
+
+def test_foia_still_goes_to_foia():
+    role, sensitivity, destination, confidence = classify_file("FOIA request response letter.pdf", "application/pdf")
+    assert role == "FOIA and Public Records"
+    assert destination == "06 FOIA and Public Records"
+    assert confidence == "High"
+
+
+def test_minecraft_goofy_file_goes_to_archive_or_review_later():
+    role, sensitivity, destination, confidence = classify_file("minecraft world build 1.zip", "application/zip")
+    assert role == "Archive"
+    assert destination in {
+        "09 Archive/Childhood and Old Personal Files",
+        "09 Archive/Old Random Files",
+        "09 Archive/Old Games and Creative Projects",
+    }
+    assert confidence == "Low"
+
+
+def test_no_file_marked_for_deletion_automatically():
+    role, sensitivity, destination, confidence = classify_file("random old joke.txt", "text/plain")
+    assert "Delete" not in destination
+    assert role in {"Archive", "Review Later"}
+    assert confidence == "Low"
 
 
 def test_move_requires_exact_approve_move():

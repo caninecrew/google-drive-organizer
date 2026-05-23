@@ -21,6 +21,7 @@ class InventoryRow:
     suggested_role: str
     suggested_sensitivity: str
     suggested_destination: str
+    suggested_confidence: str
     activity_level: str
     last_activity_time: str
     last_activity_type: str
@@ -47,7 +48,7 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
         for file in response.get("files", []):
             if file["mimeType"] == "application/vnd.google-apps.folder" and not include_folders:
                 continue
-            role, sensitivity, destination = classify_file(file.get("name", ""), file.get("mimeType", ""))
+            role, sensitivity, destination, confidence = classify_file(file.get("name", ""), file.get("mimeType", ""))
             activity = {"activity_level": "Unknown", "last_activity_time": "", "last_activity_type": ""}
             if activity_enrichment and activity_service:
                 activity = enrich_activity(activity_service, file["id"])
@@ -65,6 +66,7 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
                     suggested_role=role,
                     suggested_sensitivity=sensitivity,
                     suggested_destination=destination,
+                    suggested_confidence=confidence,
                     activity_level=activity["activity_level"],
                     last_activity_time=activity["last_activity_time"],
                     last_activity_type=activity["last_activity_type"],
@@ -74,4 +76,3 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
         if not page_token:
             break
     return rows
-

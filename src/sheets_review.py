@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from .classifier import review_destination_options
+
 HEADER_ROW = [
     "file_id",
     "name",
@@ -15,6 +17,7 @@ HEADER_ROW = [
     "suggested_role",
     "suggested_sensitivity",
     "suggested_destination",
+    "suggested_confidence",
     "activity_level",
     "last_activity_time",
     "last_activity_type",
@@ -35,7 +38,40 @@ def create_review_spreadsheet(sheets_service, title_prefix: str, rows):
         valueInputOption="RAW",
         body={"values": values},
     ).execute()
+    _apply_destination_validation(sheets_service, spreadsheet_id)
     return spreadsheet_id, title
+
+
+def _apply_destination_validation(sheets_service, spreadsheet_id: str):
+    try:
+        sheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheet_id = sheet["sheets"][0]["properties"]["sheetId"]
+        request = {
+            "requests": [
+                {
+                    "setDataValidation": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 1,
+                            "endRowIndex": 10000,
+                            "startColumnIndex": 16,
+                            "endColumnIndex": 17,
+                        },
+                        "rule": {
+                            "condition": {
+                                "type": "ONE_OF_LIST",
+                                "values": [{"userEnteredValue": value} for value in review_destination_options()],
+                            },
+                            "showCustomUi": True,
+                            "strict": False,
+                        },
+                    }
+                }
+            ]
+        }
+        sheets_service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=request).execute()
+    except Exception:
+        return
 
 
 def read_review_rows(sheets_service, spreadsheet_id: str):
@@ -49,4 +85,3 @@ def read_review_rows(sheets_service, spreadsheet_id: str):
         item = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
         rows.append(item)
     return rows
-
