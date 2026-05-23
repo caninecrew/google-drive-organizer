@@ -131,6 +131,10 @@ Safety notes:
 - `shared-file-strategy allow-capable` can approve not-owned files only when Google Drive capability fields confirm the file can be moved.
 - Low confidence, sensitive, shortcut, unknown-parent, folder, and Untitled rows still stay out of approval.
 
+Troubleshooting:
+
+- If you hit a `429` write quota error, pull the latest code and rerun the command. These commands are designed to be idempotent, so rerunning after a partial failure is safe.
+
 Summarize an exported inventory CSV before moving:
 
 ```bash

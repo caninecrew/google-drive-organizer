@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import random
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -191,6 +193,43 @@ def _write_bulk_plan_csv(plan_path: Path, rows: list[dict]):
         writer.writerows(rows)
 
 
+def _is_retryable_exception(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(exc, "status", None)
+    if status is None and hasattr(exc, "resp"):
+        status = getattr(getattr(exc, "resp"), "status", None)
+    return status in {429, 500, 502, 503, 504}
+
+
+def _retryable_request(request_fn, description: str, max_attempts: int = 5):
+    delay = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return request_fn()
+        except Exception as exc:
+            if not _is_retryable_exception(exc) or attempt >= max_attempts:
+                raise
+            jitter = random.uniform(0, delay * 0.25)
+            sleep_for = delay + jitter
+            print(f"Retrying {description} after rate limit/transient error: attempt {attempt}/{max_attempts}, sleeping {sleep_for:.2f}s")
+            time.sleep(sleep_for)
+            delay = min(delay * 2, 30)
+
+
+def _sheet_batch_update_values(sheets_service, spreadsheet_id: str, data: list[dict]):
+    if not data:
+        return None
+
+    def _call():
+        return sheets_service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"valueInputOption": "RAW", "data": data},
+        ).execute()
+
+    return _retryable_request(_call, "Sheets batchUpdate")
+
+
 def auto_approve_safe(sheets_service, spreadsheet_id: str, log_dir: str, dry_run: bool, max_approve: int | None = None):
     headers, rows = _read_sheet_rows(sheets_service, spreadsheet_id)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
@@ -317,6 +356,7 @@ def fill_destinations(sheets_service, spreadsheet_id: str, log_dir: str, dry_run
         review_column = _column_letter(headers.index("review_decision"))
     if headers and "final_destination" in headers:
         destination_column = _column_letter(headers.index("final_destination"))
+    planned_update_ranges = 0
 
     for row in rows:
         total_rows += 1
@@ -332,6 +372,7 @@ def fill_destinations(sheets_service, spreadsheet_id: str, log_dir: str, dry_run
             destination_counts[planned_final] += 1
             if not dry_run:
                 updates.append((row["_row_number"], planned_final, planned_review))
+                planned_update_ranges += 1
         else:
             still_blank_count += 1
         if not planned_final:
@@ -359,21 +400,16 @@ def fill_destinations(sheets_service, spreadsheet_id: str, log_dir: str, dry_run
         )
     _write_fill_plan_csv(plan_path, plan_rows)
     if not dry_run:
+        batch_updates = []
         for row_number, destination, review_decision in updates:
             if destination_column:
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id,
-                    range=f"Sheet1!{destination_column}{row_number}",
-                    valueInputOption="RAW",
-                    body={"values": [[destination]]},
-                ).execute()
+                batch_updates.append({"range": f"Sheet1!{destination_column}{row_number}", "values": [[destination]]})
             if review_column and not rows[row_number - 2].get("review_decision", "").strip():
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id,
-                    range=f"Sheet1!{review_column}{row_number}",
-                    valueInputOption="RAW",
-                    body={"values": [[review_decision]]},
-                ).execute()
+                batch_updates.append({"range": f"Sheet1!{review_column}{row_number}", "values": [[review_decision]]})
+        batch_call_count = 1 if batch_updates else 0
+        _sheet_batch_update_values(sheets_service, spreadsheet_id, batch_updates)
+    else:
+        batch_call_count = 0
     return {
         "total_rows": total_rows,
         "filled_count": filled_count,
@@ -383,6 +419,8 @@ def fill_destinations(sheets_service, spreadsheet_id: str, log_dir: str, dry_run
         "top_reasons": reasons.most_common(5),
         "plan_path": plan_path,
         "updated_rows": len(updates),
+        "planned_update_ranges": planned_update_ranges,
+        "batch_calls_sent": batch_call_count,
     }
 
 
@@ -444,6 +482,7 @@ def bulk_prepare_safe(
     blocked_by_low_confidence = 0
     blocked_by_sensitivity = 0
     planned_reason_rows = []
+    planned_update_ranges = 0
     review_column = None
     destination_column = None
     if headers and "review_decision" in headers:
@@ -490,12 +529,14 @@ def bulk_prepare_safe(
                 unchanged_count += 1
             elif not dry_run:
                 updates.append((row["_row_number"], planned_final, planned_review))
+                planned_update_ranges += (1 if planned_final and planned_final != current_final else 0) + (1 if planned_review != current_review else 0)
         else:
             reason_parts.extend(approval_reasons)
             if current_review != "NEEDS_REVIEW":
                 planned_review = "NEEDS_REVIEW"
                 if not dry_run:
                     updates.append((row["_row_number"], planned_final, planned_review))
+                    planned_update_ranges += (1 if planned_final and planned_final != current_final else 0) + 1
             needs_review_count += 1
             if not safe and "not owned by me" in approval_reasons and len(approval_reasons) == 1:
                 blocked_only_by_not_owned += 1
@@ -532,22 +573,14 @@ def bulk_prepare_safe(
         reasons.update(reason_parts if reason_parts else [reason])
         planned_reason_rows.append(reason)
     _write_bulk_plan_csv(plan_path, plan_rows)
+    batch_updates = []
     if not dry_run:
         for row_number, destination, review_decision in updates:
-            if destination_column:
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id,
-                    range=f"Sheet1!{destination_column}{row_number}",
-                    valueInputOption="RAW",
-                    body={"values": [[destination]]},
-                ).execute()
+            if destination_column and destination:
+                batch_updates.append({"range": f"Sheet1!{destination_column}{row_number}", "values": [[destination]]})
             if review_column:
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id,
-                    range=f"Sheet1!{review_column}{row_number}",
-                    valueInputOption="RAW",
-                    body={"values": [[review_decision]]},
-                ).execute()
+                batch_updates.append({"range": f"Sheet1!{review_column}{row_number}", "values": [[review_decision]]})
+        _sheet_batch_update_values(sheets_service, spreadsheet_id, batch_updates)
     return {
         "total_rows": total_rows,
         "filled_count": filled_count,
@@ -564,4 +597,6 @@ def bulk_prepare_safe(
         "top_reasons": reasons.most_common(5),
         "plan_path": plan_path,
         "updated_rows": len(updates),
+        "planned_update_ranges": planned_update_ranges,
+        "batch_calls_sent": 1 if batch_updates else 0,
     }

@@ -172,6 +172,8 @@ def cmd_fill_destinations(args):
     print(f"  rows that would get final_destination filled: {result['filled_count']}")
     print(f"  rows already had final_destination: {result['already_filled_count']}")
     print(f"  rows still blank: {result['still_blank_count']}")
+    print(f"  planned update ranges: {result['planned_update_ranges']}")
+    print(f"  batch calls sent: {result['batch_calls_sent']}")
     print("  top destination counts:")
     for destination, count in result["top_destinations"]:
         print(f"    {destination}: {count}")
@@ -208,6 +210,9 @@ def cmd_bulk_prepare_safe(args):
     print(f"  rows blocked only because not owned: {result['blocked_only_by_not_owned']}")
     print(f"  rows blocked by low confidence: {result['blocked_by_low_confidence']}")
     print(f"  rows blocked by sensitivity: {result['blocked_by_sensitivity']}")
+    print(f"  rows planned APPROVE_MOVE: {result['approve_count']}")
+    print(f"  planned update ranges: {result['planned_update_ranges']}")
+    print(f"  batch calls sent: {result['batch_calls_sent']}")
     print("  top destination counts:")
     for destination, count in result["top_destinations"]:
         print(f"    {destination}: {count}")

@@ -4,7 +4,7 @@ import csv
 import os
 from pathlib import Path
 
-from src.auto_approve import auto_approve_safe, bulk_prepare_safe, fill_destinations
+from src.auto_approve import _retryable_request, auto_approve_safe, bulk_prepare_safe, fill_destinations
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import inventory_files
@@ -1242,6 +1242,28 @@ def test_fill_destinations_dry_run_does_not_write_to_sheets(tmp_path):
     assert sheets.update_calls == []
 
 
+def test_fill_destinations_uses_batch_updates(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-29",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = fill_destinations(sheets, "sheet-1", str(tmp_path), False)
+    assert len(sheets.batch_update_calls) == 1
+    assert result["batch_calls_sent"] == 1
+
+
 def test_rows_without_safe_destination_remain_blank(tmp_path):
     sheets = FakeSheetsService(
         rows=[
@@ -1646,6 +1668,34 @@ def test_bulk_prepare_dry_run_writes_no_sheet_updates(tmp_path):
     )
     bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
     assert sheets.update_calls == []
+    assert sheets.batch_update_calls == []
+
+
+def test_bulk_prepare_uses_batch_updates(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-44",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), False)
+    assert len(sheets.batch_update_calls) == 1
+    assert result["batch_calls_sent"] == 1
 
 
 def test_bulk_prepare_writes_semicolon_risk_reasons(tmp_path):
@@ -1674,6 +1724,42 @@ def test_bulk_prepare_writes_semicolon_risk_reasons(tmp_path):
     with result["plan_path"].open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert ";" in rows[0]["reason"]
+
+
+def test_retryable_request_retries_429_and_5xx():
+    calls = {"count": 0}
+
+    class Err(Exception):
+        def __init__(self, status):
+            self.status_code = status
+
+    def flaky():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise Err(429)
+        return "ok"
+
+    assert _retryable_request(flaky, "test", max_attempts=2) == "ok"
+    assert calls["count"] == 2
+
+
+def test_retryable_request_does_not_retry_404():
+    calls = {"count": 0}
+
+    class Err(Exception):
+        def __init__(self, status):
+            self.status_code = status
+
+    def flaky():
+        calls["count"] += 1
+        raise Err(404)
+
+    try:
+        _retryable_request(flaky, "test", max_attempts=2)
+        assert False, "expected exception"
+    except Err:
+        pass
+    assert calls["count"] == 1
 
 
 def test_bulk_prepare_never_sets_delete_later(tmp_path):
@@ -1750,6 +1836,11 @@ class FakeSheetsValues:
             self.service.update_calls.append({"spreadsheetId": spreadsheetId, "range": range, "valueInputOption": valueInputOption, "body": body})
         return FakeExecute({"updatedRange": range, "body": body})
 
+    def batchUpdate(self, spreadsheetId, body):
+        if self.service is not None:
+            self.service.batch_update_calls.append({"spreadsheetId": spreadsheetId, "body": body})
+        return FakeExecute({"updated": True})
+
 
 class FakeSheetsSpreadsheet:
     def __init__(self, rows, service=None):
@@ -1764,6 +1855,7 @@ class FakeSheetsService:
     def __init__(self, rows):
         self._rows = rows
         self.update_calls = []
+        self.batch_update_calls = []
 
     def spreadsheets(self):
         return FakeSheetsSpreadsheet(self._rows, service=self)
