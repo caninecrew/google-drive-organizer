@@ -4,7 +4,7 @@ import csv
 import os
 from pathlib import Path
 
-from src.auto_approve import auto_approve_safe, fill_destinations
+from src.auto_approve import auto_approve_safe, bulk_prepare_safe, fill_destinations
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import inventory_files
@@ -1285,6 +1285,269 @@ def test_fill_destinations_does_not_change_suggested_destination(tmp_path):
     )
     fill_destinations(sheets, "sheet-1", str(tmp_path), True)
     assert sheets.update_calls == []
+
+
+def test_safe_bulk_prepare_marks_safe_row_approve_move(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-30",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "03 Work and Career"
+    assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
+
+
+def test_safe_bulk_prepare_marks_risky_rows_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-31",
+                "name": "Untitled document",
+                "current_path": "Unknown Parent/Untitled document",
+                "mime_type": "application/vnd.google-apps.document",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "True",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["review_decision_planned"] == "NEEDS_REVIEW"
+
+
+def test_bulk_prepare_skips_shortcuts_not_owned_unknown_parent_sensitive_and_untitled(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-32",
+                "name": "shortcut",
+                "current_path": "My Drive/Docs/shortcut",
+                "mime_type": "application/vnd.google-apps.shortcut",
+                "suggested_role": "Scouting",
+                "suggested_destination": "04 Scouting",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "True",
+                "final_destination": "",
+                "review_decision": "",
+            },
+            {
+                "file_id": "file-33",
+                "name": "doc.txt",
+                "current_path": "My Drive/Docs/doc.txt",
+                "mime_type": "text/plain",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+            {
+                "file_id": "file-34",
+                "name": "doc.txt",
+                "current_path": "Unknown Parent/doc.txt",
+                "mime_type": "text/plain",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+            {
+                "file_id": "file-35",
+                "name": "Incident Report",
+                "current_path": "My Drive/Docs/Incident Report",
+                "mime_type": "application/pdf",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Needs Sensitive Review",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+            {
+                "file_id": "file-36",
+                "name": "Untitled document",
+                "current_path": "My Drive/Docs/Untitled document",
+                "mime_type": "application/vnd.google-apps.document",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert all(row["review_decision_planned"] == "NEEDS_REVIEW" for row in rows[0:5])
+
+
+def test_bulk_prepare_existing_final_destination_is_preserved(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-37",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "03 Work and Career"
+
+
+def test_bulk_prepare_media_rules_apply(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-38",
+                "name": "Camp photo.jpg",
+                "current_path": "My Drive/Scouting/Boxwell/Camp photo.jpg",
+                "mime_type": "image/jpeg",
+                "suggested_role": "Scouting",
+                "suggested_destination": "04 Scouting",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+            {
+                "file_id": "file-39",
+                "name": "Family History Videos",
+                "current_path": "My Drive/Personal/Family History Videos",
+                "mime_type": "video/mp4",
+                "suggested_role": "Personal",
+                "suggested_destination": "01 Personal",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+            {
+                "file_id": "file-40",
+                "name": "vacation.jpg",
+                "current_path": "My Drive/Random/vacation.jpg",
+                "mime_type": "image/jpeg",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            },
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["final_destination_planned"] == "04 Scouting/Photos"
+    assert rows[1]["final_destination_planned"] == "01 Personal/Family History/Video Interviews"
+    assert rows[2]["final_destination_planned"] == "08 Photos and Media"
+
+
+def test_bulk_prepare_dry_run_writes_no_sheet_updates(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-41",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    assert sheets.update_calls == []
+
+
+def test_bulk_prepare_never_sets_delete_later(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-42",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert all(row["review_decision_planned"] != "DELETE_LATER" for row in rows)
 
 
 class FakeDriveFiles:

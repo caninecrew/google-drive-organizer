@@ -103,6 +103,7 @@ Safe bulk approval workflow:
 ```bash
 python -m src.main fill-destinations --spreadsheet-id SPREADSHEET_ID --dry-run
 python -m src.main fill-destinations --spreadsheet-id SPREADSHEET_ID
+python -m src.main bulk-prepare-safe --spreadsheet-id SPREADSHEET_ID --dry-run
 python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --dry-run --max-approve 10
 python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --max-approve 10
 python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
@@ -114,9 +115,9 @@ Recommended steps:
 2. Run `fill-destinations --dry-run`.
 3. Review the fill destination plan CSV.
 4. Run `fill-destinations`.
-5. Review the summary.
-6. Run `auto-approve-safe --dry-run --max-approve 10`.
-7. Run `auto-approve-safe --max-approve 10`.
+5. Run `bulk-prepare-safe --dry-run`.
+6. Review the bulk prepare plan CSV.
+7. Run `bulk-prepare-safe`.
 8. Run `move-approved --dry-run`.
 9. Review the move plan CSV.
 10. Run a real move only for that tiny approved batch.

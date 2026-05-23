@@ -37,6 +37,24 @@ FILL_DESTINATIONS_PLAN_HEADER = [
     "reason",
 ]
 
+BULK_PREPARE_SAFE_PLAN_HEADER = [
+    "file_id",
+    "name",
+    "current_path",
+    "mime_type",
+    "suggested_role",
+    "suggested_destination",
+    "suggested_confidence",
+    "suggested_sensitivity",
+    "owned_by_me",
+    "is_shortcut",
+    "final_destination_current",
+    "final_destination_planned",
+    "review_decision_current",
+    "review_decision_planned",
+    "reason",
+]
+
 
 def _read_sheet_rows(sheets_service, spreadsheet_id: str):
     result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range="Sheet1!A1:ZZ").execute()
@@ -120,6 +138,14 @@ def _write_fill_plan_csv(plan_path: Path, rows: list[dict]):
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     with plan_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FILL_DESTINATIONS_PLAN_HEADER)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_bulk_plan_csv(plan_path: Path, rows: list[dict]):
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    with plan_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=BULK_PREPARE_SAFE_PLAN_HEADER)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -312,6 +338,135 @@ def fill_destinations(sheets_service, spreadsheet_id: str, log_dir: str, dry_run
         "filled_count": filled_count,
         "already_filled_count": already_filled_count,
         "still_blank_count": still_blank_count,
+        "top_destinations": destination_counts.most_common(5),
+        "top_reasons": reasons.most_common(5),
+        "plan_path": plan_path,
+        "updated_rows": len(updates),
+    }
+
+
+def _planned_destination_for_bulk(row: dict) -> tuple[str, str]:
+    current = row.get("final_destination", "").strip()
+    if current:
+        return current, "existing final_destination preserved"
+    planned, reason = _safe_fill_destination(row)
+    return planned, reason
+
+
+def _safe_to_approve_bulk(row: dict, planned_final_destination: str, include_medium_confidence: bool, include_low_confidence: bool) -> tuple[bool, str]:
+    if not planned_final_destination:
+        return False, "blank final_destination"
+    confidence = row.get("suggested_confidence", "")
+    if confidence == "Low" and not include_low_confidence:
+        return False, "low confidence"
+    if confidence == "Medium" and not include_medium_confidence:
+        return False, "medium confidence excluded"
+    safe, reason = _is_safe_for_auto_approve({**row, "final_destination": planned_final_destination})
+    return safe, reason
+
+
+def bulk_prepare_safe(
+    sheets_service,
+    spreadsheet_id: str,
+    log_dir: str,
+    dry_run: bool,
+    include_medium_confidence: bool = True,
+    include_low_confidence: bool = False,
+    limit: int | None = None,
+):
+    headers, rows = _read_sheet_rows(sheets_service, spreadsheet_id)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
+    plan_path = Path(log_dir) / f"bulk_prepare_safe_plan_{timestamp}.csv"
+    plan_rows = []
+    updates = []
+    total_rows = 0
+    filled_count = 0
+    approve_count = 0
+    needs_review_count = 0
+    unchanged_count = 0
+    reasons = Counter()
+    destination_counts = Counter()
+    review_column = None
+    destination_column = None
+    if headers and "review_decision" in headers:
+        review_column = _column_letter(headers.index("review_decision"))
+    if headers and "final_destination" in headers:
+        destination_column = _column_letter(headers.index("final_destination"))
+
+    safe_seen = 0
+    for row in rows:
+        total_rows += 1
+        current_final = row.get("final_destination", "").strip()
+        current_review = row.get("review_decision", "").strip()
+        planned_final, destination_reason = _planned_destination_for_bulk(row)
+        if not current_final and planned_final:
+            filled_count += 1
+            destination_counts[planned_final] += 1
+        safe, approval_reason = _safe_to_approve_bulk(row, planned_final, include_medium_confidence, include_low_confidence)
+        planned_review = current_review
+        reason = destination_reason
+        if safe and (limit is None or safe_seen < limit):
+            planned_review = "APPROVE_MOVE"
+            approve_count += 1
+            safe_seen += 1
+            if current_review == "APPROVE_MOVE" and current_final == planned_final:
+                unchanged_count += 1
+            elif not dry_run:
+                updates.append((row["_row_number"], planned_final, planned_review))
+        else:
+            if current_review != "NEEDS_REVIEW":
+                planned_review = "NEEDS_REVIEW"
+                if not dry_run:
+                    updates.append((row["_row_number"], planned_final, planned_review))
+            needs_review_count += 1
+            reason = approval_reason if not safe else "max limit reached"
+        if current_final and current_final == planned_final and current_review == planned_review:
+            unchanged_count += 1
+        if not planned_final:
+            reason = approval_reason if not safe else destination_reason
+        plan_rows.append(
+            {
+                "file_id": row.get("file_id", ""),
+                "name": row.get("name", ""),
+                "current_path": row.get("current_path", ""),
+                "mime_type": row.get("mime_type", ""),
+                "suggested_role": row.get("suggested_role", ""),
+                "suggested_destination": row.get("suggested_destination", ""),
+                "suggested_confidence": row.get("suggested_confidence", ""),
+                "suggested_sensitivity": row.get("suggested_sensitivity", ""),
+                "owned_by_me": row.get("owned_by_me", ""),
+                "is_shortcut": row.get("is_shortcut", ""),
+                "final_destination_current": current_final,
+                "final_destination_planned": planned_final,
+                "review_decision_current": current_review,
+                "review_decision_planned": planned_review,
+                "reason": reason,
+            }
+        )
+        reasons[reason] += 1
+    _write_bulk_plan_csv(plan_path, plan_rows)
+    if not dry_run:
+        for row_number, destination, review_decision in updates:
+            if destination_column:
+                sheets_service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"Sheet1!{destination_column}{row_number}",
+                    valueInputOption="RAW",
+                    body={"values": [[destination]]},
+                ).execute()
+            if review_column:
+                sheets_service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"Sheet1!{review_column}{row_number}",
+                    valueInputOption="RAW",
+                    body={"values": [[review_decision]]},
+                ).execute()
+    return {
+        "total_rows": total_rows,
+        "filled_count": filled_count,
+        "approve_count": approve_count,
+        "needs_review_count": needs_review_count,
+        "unchanged_count": unchanged_count,
         "top_destinations": destination_counts.most_common(5),
         "top_reasons": reasons.most_common(5),
         "plan_path": plan_path,
