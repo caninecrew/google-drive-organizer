@@ -1,4 +1,4 @@
-# Google Drive Organizer
+# google-drive-organizer
 
 Safe Google Drive organization assistant for personal use.
 
@@ -9,6 +9,26 @@ Safe Google Drive organization assistant for personal use.
 - Suggests categories, destination folders, sensitivity, and activity metadata.
 - Moves only files that you explicitly approve in the review sheet.
 - Never deletes files.
+
+## Windows PowerShell Setup
+
+```powershell
+cd "C:\Users\Samue\OneDrive\Documents\google-drive-organizer"
+py -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m pytest
+python -m src.main inventory
+```
+
+If PowerShell blocks activation, run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
 
 ## Setup
 
@@ -84,3 +104,9 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 - Every attempted action is logged to a local CSV file.
 - Drive Labels are not required.
 - Do not run this tool first on your whole Drive with moves enabled.
+
+## Notes for Windows
+
+- Activate the virtual environment with `.\.venv\Scripts\Activate.ps1`, not `.\.venv\Scripts\activate`.
+- If you see script execution policy errors, use the Process-scope bypass command above in the current shell only.
+- The project should be run from `C:\Users\Samue\OneDrive\Documents\google-drive-organizer`, not the old folder name.
