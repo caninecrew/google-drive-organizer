@@ -19,6 +19,15 @@ class InventoryRow:
     size: str
     web_view_link: str
     current_path: str
+    owned_by_me: str
+    capabilities_can_move_item_within_drive: str
+    capabilities_can_move_item_out_of_drive: str
+    capabilities_can_add_my_drive_parent: str
+    capabilities_can_remove_my_drive_parent: str
+    is_shortcut: str
+    shortcut_target_id: str
+    shortcut_target_mime_type: str
+    shortcut_target_resource_key: str
     suggested_role: str
     suggested_sensitivity: str
     suggested_destination: str
@@ -42,7 +51,7 @@ def _safe_join(items) -> str:
 def _build_folder_cache(drive_service) -> dict[str, dict[str, str]]:
     cache: dict[str, dict[str, str]] = {}
     page_token = None
-    fields = "nextPageToken, files(id, name, parents, mimeType)"
+    fields = "nextPageToken, files(id, name, parents, mimeType, shortcutDetails)"
     while True:
         try:
             response = drive_service.files().list(
@@ -58,6 +67,8 @@ def _build_folder_cache(drive_service) -> dict[str, dict[str, str]]:
             cache[folder["id"]] = {
                 "name": folder.get("name", ""),
                 "parent": (folder.get("parents") or [None])[0],
+                "mimeType": folder.get("mimeType", ""),
+                "shortcutDetails": folder.get("shortcutDetails", {}),
             }
         page_token = response.get("nextPageToken")
         if not page_token:
@@ -71,7 +82,7 @@ def _fetch_folder_metadata(drive_service, folder_cache: dict[str, dict[str, str]
     try:
         response = drive_service.files().get(
             fileId=folder_id,
-            fields="id, name, parents, mimeType",
+            fields="id, name, parents, mimeType, shortcutDetails",
         ).execute()
     except Exception:
         return None
@@ -81,8 +92,19 @@ def _fetch_folder_metadata(drive_service, folder_cache: dict[str, dict[str, str]
     folder_cache[folder_id] = {
         "name": response.get("name", ""),
         "parent": parent,
+        "mimeType": response.get("mimeType", ""),
+        "shortcutDetails": response.get("shortcutDetails", {}),
     }
     return folder_cache[folder_id]
+
+
+def _resolve_shortcut_details(file_metadata: dict) -> tuple[str, str, str]:
+    shortcut_details = file_metadata.get("shortcutDetails") or {}
+    return (
+        str(shortcut_details.get("targetId", "")),
+        str(shortcut_details.get("targetMimeType", "")),
+        str(shortcut_details.get("targetResourceKey", "")),
+    )
 
 
 def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]], drive_service=None) -> tuple[str, str]:
@@ -121,11 +143,11 @@ def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]], 
     return path, base
 
 
-def inventory_files(drive_service, activity_service=None, include_folders: bool = False, activity_enrichment: bool = False):
+def inventory_files(drive_service, activity_service=None, include_folders: bool = False, activity_enrichment: bool = False, media_policy: str = "role_first"):
     rows = []
     page_token = None
     query = "trashed = false"
-    fields = "nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime, owners(displayName, emailAddress), webViewLink, size)"
+    fields = "nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime, owners(displayName, emailAddress), webViewLink, size, ownedByMe, capabilities(canMoveItemWithinDrive, canMoveItemOutOfDrive, canAddMyDriveParent, canRemoveMyDriveParent), shortcutDetails)"
     folder_cache = _build_folder_cache(drive_service)
     while True:
         try:
@@ -136,10 +158,17 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
             if file["mimeType"] == "application/vnd.google-apps.folder" and not include_folders:
                 continue
             current_path, path_note = _resolve_path(file, folder_cache, drive_service=drive_service)
-            role, sensitivity, destination, confidence = classify_file(file.get("name", ""), file.get("mimeType", ""), current_path=current_path)
+            role, sensitivity, destination, confidence = classify_file(
+                file.get("name", ""),
+                file.get("mimeType", ""),
+                current_path=current_path,
+                media_policy=media_policy,
+            )
             activity = {"activity_level": "Unknown", "last_activity_time": "", "last_activity_type": ""}
             if activity_enrichment and activity_service:
                 activity = enrich_activity(activity_service, file["id"])
+            shortcut_target_id, shortcut_target_mime_type, shortcut_target_resource_key = _resolve_shortcut_details(file)
+            capabilities = file.get("capabilities") or {}
             rows.append(
                 InventoryRow(
                     file_id=file.get("id", ""),
@@ -152,6 +181,15 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
                     size=str(file.get("size", "")),
                     web_view_link=file.get("webViewLink", ""),
                     current_path=current_path if not path_note else f"{current_path} [{path_note}]",
+                    owned_by_me=str(bool(file.get("ownedByMe", False))),
+                    capabilities_can_move_item_within_drive=str(bool(capabilities.get("canMoveItemWithinDrive", False))),
+                    capabilities_can_move_item_out_of_drive=str(bool(capabilities.get("canMoveItemOutOfDrive", False))),
+                    capabilities_can_add_my_drive_parent=str(bool(capabilities.get("canAddMyDriveParent", False))),
+                    capabilities_can_remove_my_drive_parent=str(bool(capabilities.get("canRemoveMyDriveParent", False))),
+                    is_shortcut=str(file.get("mimeType") == "application/vnd.google-apps.shortcut"),
+                    shortcut_target_id=shortcut_target_id,
+                    shortcut_target_mime_type=shortcut_target_mime_type,
+                    shortcut_target_resource_key=shortcut_target_resource_key,
                     suggested_role=role,
                     suggested_sensitivity=sensitivity,
                     suggested_destination=destination,

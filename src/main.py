@@ -21,7 +21,13 @@ def cmd_inventory(args):
     sheets = get_sheets_service(creds)
     activity = get_drive_activity_service(creds) if config.activity_enrichment else None
     log_path = Path(config.log_dir) / f"inventory_log_{datetime.now().strftime('%Y-%m-%d')}.csv"
-    rows = inventory_files(drive, activity, include_folders=config.include_folders, activity_enrichment=config.activity_enrichment)
+    rows = inventory_files(
+        drive,
+        activity,
+        include_folders=config.include_folders,
+        activity_enrichment=config.activity_enrichment,
+        media_policy=config.media_policy,
+    )
     spreadsheet_id, title = create_review_spreadsheet(sheets, config.review_spreadsheet_prefix, rows)
     export_dir = Path("data/exports")
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -39,6 +45,15 @@ def cmd_inventory(args):
             "size",
             "web_view_link",
             "current_path",
+            "owned_by_me",
+            "capabilities_can_move_item_within_drive",
+            "capabilities_can_move_item_out_of_drive",
+            "capabilities_can_add_my_drive_parent",
+            "capabilities_can_remove_my_drive_parent",
+            "is_shortcut",
+            "shortcut_target_id",
+            "shortcut_target_mime_type",
+            "shortcut_target_resource_key",
             "suggested_role",
             "suggested_sensitivity",
             "suggested_destination",
@@ -79,6 +94,7 @@ def cmd_move_approved(args):
         args.spreadsheet_id,
         config.allow_create_missing_destination_folders,
         config.allow_move_folders,
+        config.allow_move_shortcuts,
         args.dry_run,
         config.log_dir,
     )
@@ -86,15 +102,10 @@ def cmd_move_approved(args):
     for _file_id, status, detail in results:
         if status == "would_move":
             summary["would_move"] += 1
-            print(f"WOULD_MOVE: {_file_id} -> {detail}")
         elif status == "moved":
             summary["moved"] += 1
-            print(f"MOVED: {_file_id} -> {detail}")
         elif status in summary:
             summary[status] += 1
-            print(f"{status.upper()}: {_file_id} -> {detail}")
-        else:
-            print(f"{status.upper()}: {_file_id} -> {detail}")
     print("Move summary:")
     print(f"  rows evaluated: {evaluated_count}")
     print(f"  WOULD_MOVE: {summary['would_move']}")

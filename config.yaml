@@ -2,6 +2,7 @@ include_folders: false
 activity_enrichment: false
 allow_create_missing_destination_folders: false
 allow_move_folders: false
+allow_move_shortcuts: false
+media_policy: role_first
 review_spreadsheet_prefix: Google Drive Organizer Review
 log_dir: data/logs
-

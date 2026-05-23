@@ -8,6 +8,7 @@ Safe Google Drive organization assistant for personal use.
 - Writes review rows to Google Sheets.
 - Suggests categories, destination folders, sensitivity, and activity metadata.
 - Includes a readable `current_path` column so folder context can influence review decisions.
+- Includes owner, capability, and shortcut metadata so risky rows can be reviewed safely.
 - Moves only files that you explicitly approve in the review sheet.
 - Never deletes files.
 
@@ -79,6 +80,12 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 
 Every `move-approved` run writes a move plan CSV under `data/logs/` with the proposed or completed actions, including `current_path`, destination, and reason codes for skipped rows.
 
+The review workbook includes three sheets:
+
+- `Sheet1` for the inventory rows.
+- `Instructions` for the review rules.
+- `Summary` for counts and quality checks.
+
 In the review sheet:
 
 - `review_decision` controls what action the tool may take.
@@ -87,6 +94,9 @@ In the review sheet:
 - `APPROVE_MOVE` should only be used after `final_destination` is verified.
 - `review_decision` options are action/status values only.
 - `final_destination` options are folder paths only.
+- Owner and capability columns show whether a file is owned by you and whether Drive says it can be moved safely.
+- Shortcut rows are flagged explicitly. Moving a shortcut moves the shortcut entry, not necessarily the underlying target file.
+- `activity_level` stays `Unknown` when activity enrichment is disabled in config.
 
 Summarize an exported inventory CSV before moving:
 
@@ -117,13 +127,16 @@ Use either `--latest` or `--csv`, not both. The command will return a clear erro
 ## Review workflow
 
 1. Run inventory.
-2. Open the generated spreadsheet.
-3. Review suggestions and set `review_decision` to `APPROVE_MOVE` only for rows you want moved.
-4. Set `final_destination` if you want to override the suggested destination.
-5. Run `move-approved` with `--dry-run` first.
-6. Review the generated move plan CSV before making any real changes.
-7. Run `move-approved` without `--dry-run` only after confirming the dry run output.
-8. Review the inventory summary for unresolved parents, low-confidence rows, and untitled files before approving moves.
+2. Run the summary command.
+3. Create or refresh the destination folder structure.
+4. Open the generated spreadsheet.
+5. Review suggestions and set `review_decision` to `APPROVE_MOVE` only for rows you want moved.
+6. Fill in `final_destination` for each approved row.
+7. Start with only 5 to 10 obvious rows.
+8. Run `move-approved` with `--dry-run` first.
+9. Review the generated move plan CSV before making any real changes.
+10. Run `move-approved` without `--dry-run` only after confirming the dry run output.
+11. Review the inventory summary for unresolved parents, low-confidence rows, shortcuts, and untitled files before approving moves.
 
 ## Why `current_path` matters
 
@@ -137,6 +150,16 @@ Use either `--latest` or `--csv`, not both. The command will return a clear erro
 - `bank` only means Financial when there is actual financial/account/tax/payment context.
 - Phase 10 score sheets are not automatically coding projects.
 - Low-confidence rows should be reviewed manually before any move is approved.
+- `Instructions` and `Summary` sheets are included so you can review the workbook without reading the code.
+
+## Media Policy
+
+The default `media_policy` is `role_first`.
+
+- `role_first` keeps Scouting media in Scouting, Church media in Church and Ministry, and family-history media in the personal family-history folders when possible.
+- `media_first` prioritizes the media buckets under `08 Photos and Media`.
+- Scouting photos can go to `04 Scouting/Photos` or `08 Photos and Media/Scouting Photos` depending on `media_policy`.
+- Family history videos can go to `01 Personal/Family History/Video Interviews` or `08 Photos and Media/Family History Videos` depending on `media_policy`.
 
 ## First Real Run Checklist
 

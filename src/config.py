@@ -13,6 +13,8 @@ class AppConfig:
     activity_enrichment: bool = False
     allow_create_missing_destination_folders: bool = False
     allow_move_folders: bool = False
+    allow_move_shortcuts: bool = False
+    media_policy: str = "role_first"
     review_spreadsheet_prefix: str = "Google Drive Organizer Review"
     log_dir: str = "data/logs"
 
@@ -29,9 +31,10 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
             data.get("allow_create_missing_destination_folders", False)
         ),
         allow_move_folders=bool(data.get("allow_move_folders", False)),
+        allow_move_shortcuts=bool(data.get("allow_move_shortcuts", False)),
+        media_policy=str(data.get("media_policy", "role_first")),
         review_spreadsheet_prefix=str(
             data.get("review_spreadsheet_prefix", "Google Drive Organizer Review")
         ),
         log_dir=str(data.get("log_dir", "data/logs")),
     )
-

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
+from src.drive_inventory import inventory_files
 from src.drive_inventory import _resolve_path
 from src.move_approved import move_approved_rows
 from src.summary import build_warnings, find_latest_inventory_csv, format_summary, summarize_rows
@@ -251,7 +252,7 @@ def test_academic_transcripts_still_school_record():
     assert sensitivity == "School Record"
 
 
-def test_wilson_bank_and_trust_sponsor_letter_not_financial():
+def test_wilson_bank_and_trust_sponsor_letter_not_financial_by_default():
     role, sensitivity, destination, confidence = classify_file("Letter to Sponsor (Wilson Bank and Trust)", "application/pdf")
     assert sensitivity in {"Normal", "Needs Sensitive Review", "Legal/Public Records"}
 
@@ -259,6 +260,95 @@ def test_wilson_bank_and_trust_sponsor_letter_not_financial():
 def test_phase_10_score_sheet_not_automatically_coding():
     role, sensitivity, destination, confidence = classify_file("Phase 10 Score Sheet", "application/pdf")
     assert role in {"Review Later", "Personal", "Archive"}
+
+
+def test_phase_10_development_context_can_be_coding():
+    role, sensitivity, destination, confidence = classify_file(
+        "Phase 10 implementation notes",
+        "application/pdf",
+        current_path="My Drive/Projects/Python",
+    )
+    assert role == "Projects and Coding"
+
+
+def test_family_history_videos_get_personal_family_history_destination():
+    role, sensitivity, destination, confidence = classify_file(
+        "Family History Videos",
+        "video/mp4",
+    )
+    assert destination in {
+        "01 Personal/Family History/Video Interviews",
+        "08 Photos and Media/Family History Videos",
+    }
+
+
+def test_word_bank_does_not_become_financial():
+    role, sensitivity, destination, confidence = classify_file("L2 - word bank", "application/pdf")
+    assert sensitivity != "Financial"
+
+
+def test_fall_video_not_student_information():
+    role, sensitivity, destination, confidence = classify_file("Linus Slow Motion Fall.mp4", "video/mp4")
+    assert sensitivity == "Normal"
+
+
+def test_media_policy_role_first_keeps_scouting_media_in_scouting():
+    role, sensitivity, destination, confidence = classify_file(
+        "Camp photo.jpg",
+        "image/jpeg",
+        current_path="My Drive/Scouting/Boxwell",
+        media_policy="role_first",
+    )
+    assert role == "Scouting"
+    assert destination in {"04 Scouting", "04 Scouting/Photos"}
+
+
+def test_media_policy_media_first_routes_scouting_media_to_photos():
+    role, sensitivity, destination, confidence = classify_file(
+        "Camp photo.jpg",
+        "image/jpeg",
+        current_path="My Drive/Scouting/Boxwell",
+        media_policy="media_first",
+    )
+    assert destination == "08 Photos and Media/Scouting Photos"
+
+
+def test_inventory_metadata_includes_owner_and_shortcut_fields():
+    drive = FakeDriveService(
+        files={
+            "folder-1": {"id": "folder-1", "name": "Docs", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+            "shortcut-1": {
+                "id": "shortcut-1",
+                "name": "Shortcut to Doc",
+                "mimeType": "application/vnd.google-apps.shortcut",
+                "parents": ["folder-1"],
+                "createdTime": "2026-01-01T00:00:00Z",
+                "modifiedTime": "2026-01-02T00:00:00Z",
+                "owners": [{"displayName": "Sam"}],
+                "webViewLink": "https://example.com",
+                "ownedByMe": False,
+                "capabilities": {
+                    "canMoveItemWithinDrive": False,
+                    "canMoveItemOutOfDrive": False,
+                    "canAddMyDriveParent": False,
+                    "canRemoveMyDriveParent": False,
+                },
+                "shortcutDetails": {
+                    "targetId": "target-1",
+                    "targetMimeType": "application/pdf",
+                    "targetResourceKey": "rk-1",
+                },
+            },
+        }
+    )
+    rows = inventory_files(drive, include_folders=False, activity_enrichment=False)
+    shortcut_row = next(row for row in rows if row.file_id == "shortcut-1")
+    assert shortcut_row.owned_by_me == "False"
+    assert shortcut_row.capabilities_can_move_item_within_drive == "False"
+    assert shortcut_row.is_shortcut == "True"
+    assert shortcut_row.shortcut_target_id == "target-1"
+    assert shortcut_row.shortcut_target_mime_type == "application/pdf"
+    assert shortcut_row.shortcut_target_resource_key == "rk-1"
 
 
 def test_path_builder_handles_missing_parent_safely():
@@ -311,6 +401,7 @@ def test_move_requires_exact_approve_move():
     drive = FakeDriveService(
         files={
             "file-1": {"id": "file-1", "name": "doc.txt", "mimeType": "text/plain", "parents": ["parent-1"]},
+            "02-school": {"id": "02-school", "name": "02 School and Education", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
         }
     )
     sheets = FakeSheetsService(
@@ -323,8 +414,8 @@ def test_move_requires_exact_approve_move():
             }
         ]
     )
-    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
-    assert results == []
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "review_decision is not APPROVE_MOVE")]
     assert drive.update_calls == []
     assert evaluated_count == 1
     assert plan_path.exists()
@@ -339,6 +430,7 @@ def test_blank_destination_is_skipped():
     drive = FakeDriveService(
         files={
             "file-1": {"id": "file-1", "name": "doc.txt", "mimeType": "text/plain", "parents": ["parent-1"]},
+            "02-school": {"id": "02-school", "name": "02 School and Education", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
         }
     )
     sheets = FakeSheetsService(
@@ -352,14 +444,14 @@ def test_blank_destination_is_skipped():
             }
         ]
     )
-    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
-    assert results == [("file-1", "skipped", "missing destination")]
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "final destination is blank")]
     assert drive.update_calls == []
     assert evaluated_count == 1
     with plan_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["outcome"] == "SKIPPED"
-    assert rows[0]["reason"] in {"final destination is blank", "review_decision is not APPROVE_MOVE"}
+    assert rows[0]["reason"] == "final destination is blank"
 
 
 def test_approve_move_with_blank_final_destination_is_skipped():
@@ -379,8 +471,8 @@ def test_approve_move_with_blank_final_destination_is_skipped():
             }
         ]
     )
-    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
-    assert results == [("file-1", "skipped", "missing destination")]
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "final destination is blank")]
     assert drive.update_calls == []
     assert evaluated_count == 1
     with plan_path.open(newline="", encoding="utf-8") as f:
@@ -393,6 +485,7 @@ def test_dry_run_produces_would_move_without_update_call():
     drive = FakeDriveService(
         files={
             "file-1": {"id": "file-1", "name": "doc.txt", "mimeType": "text/plain", "parents": ["parent-1"]},
+            "02-school": {"id": "02-school", "name": "02 School and Education", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
             "dest-1": {"id": "dest-1", "name": "01 Personal", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
         }
     )
@@ -409,7 +502,7 @@ def test_dry_run_produces_would_move_without_update_call():
             }
         ]
     )
-    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
     assert results == [("file-1", "would_move", "02 School and Education")]
     assert drive.update_calls == []
     assert evaluated_count == 1
@@ -418,6 +511,159 @@ def test_dry_run_produces_would_move_without_update_call():
     assert rows[0]["outcome"] == "WOULD_MOVE"
     assert rows[0]["current_path"] == "My Drive/Docs/doc.txt"
     assert rows[0]["destination_path"] == "02 School and Education"
+
+
+def test_move_approved_uses_final_destination_not_suggested_destination():
+    drive = FakeDriveService(
+        files={
+            "file-1": {
+                "id": "file-1",
+                "name": "doc.txt",
+                "mimeType": "text/plain",
+                "parents": ["parent-1"],
+                "ownedByMe": True,
+                "capabilities": {
+                    "canMoveItemWithinDrive": True,
+                    "canMoveItemOutOfDrive": True,
+                    "canAddMyDriveParent": True,
+                    "canRemoveMyDriveParent": True,
+                },
+            },
+            "dest-1": {"id": "dest-1", "name": "02 School and Education", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+        }
+    )
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "doc.txt",
+                "review_decision": "APPROVE_MOVE",
+                "suggested_destination": "01 Personal",
+                "final_destination": "02 School and Education",
+                "current_path": "My Drive/Docs/doc.txt",
+                "parents": "parent-1",
+            }
+        ]
+    )
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "would_move", "02 School and Education")]
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["destination_path"] == "02 School and Education"
+
+
+def test_shortcut_rows_are_skipped_by_default():
+    drive = FakeDriveService(
+        files={
+            "file-1": {
+                "id": "file-1",
+                "name": "shortcut",
+                "mimeType": "application/vnd.google-apps.shortcut",
+                "parents": ["parent-1"],
+                "ownedByMe": True,
+                "capabilities": {
+                    "canMoveItemWithinDrive": True,
+                    "canMoveItemOutOfDrive": True,
+                    "canAddMyDriveParent": True,
+                    "canRemoveMyDriveParent": True,
+                },
+            },
+            "01-personal": {"id": "01-personal", "name": "01 Personal", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+        }
+    )
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "shortcut",
+                "review_decision": "APPROVE_MOVE",
+                "final_destination": "01 Personal",
+                "current_path": "My Drive/Docs/shortcut",
+                "parents": "parent-1",
+            }
+        ]
+    )
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "shortcut moves disabled")]
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["reason"] == "shortcut moves disabled"
+
+
+def test_not_owned_file_without_capability_is_skipped():
+    drive = FakeDriveService(
+        files={
+            "file-1": {
+                "id": "file-1",
+                "name": "doc.txt",
+                "mimeType": "text/plain",
+                "parents": ["parent-1"],
+                "ownedByMe": False,
+                "capabilities": {
+                    "canMoveItemWithinDrive": False,
+                    "canMoveItemOutOfDrive": False,
+                    "canAddMyDriveParent": True,
+                    "canRemoveMyDriveParent": True,
+                },
+            },
+            "01-personal": {"id": "01-personal", "name": "01 Personal", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+        }
+    )
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "doc.txt",
+                "review_decision": "APPROVE_MOVE",
+                "final_destination": "01 Personal",
+                "current_path": "My Drive/Docs/doc.txt",
+                "parents": "parent-1",
+            }
+        ]
+    )
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "file not owned by authenticated user")]
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["reason"] == "file not owned by authenticated user"
+
+
+def test_not_movable_file_is_skipped_when_capabilities_missing():
+    drive = FakeDriveService(
+        files={
+            "file-1": {
+                "id": "file-1",
+                "name": "doc.txt",
+                "mimeType": "text/plain",
+                "parents": ["parent-1"],
+                "ownedByMe": True,
+                "capabilities": {
+                    "canMoveItemWithinDrive": False,
+                    "canMoveItemOutOfDrive": False,
+                    "canAddMyDriveParent": False,
+                    "canRemoveMyDriveParent": False,
+                },
+            },
+            "01-personal": {"id": "01-personal", "name": "01 Personal", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+        }
+    )
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "doc.txt",
+                "review_decision": "APPROVE_MOVE",
+                "final_destination": "01 Personal",
+                "current_path": "My Drive/Docs/doc.txt",
+                "parents": "parent-1",
+            }
+        ]
+    )
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "cannot add destination parent")]
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["reason"] == "cannot add destination parent"
 
 
 def test_drive_activity_missing_fields_returns_unknown():
@@ -489,6 +735,8 @@ def test_validation_request_targets_correct_columns():
     assert review_req["setDataValidation"]["range"]["endColumnIndex"] == 18
     assert final_req["setDataValidation"]["range"]["startColumnIndex"] == 18
     assert final_req["setDataValidation"]["range"]["endColumnIndex"] == 19
+    assert review_req["setDataValidation"]["range"]["endRowIndex"] >= 100000
+    assert final_req["setDataValidation"]["range"]["endRowIndex"] >= 100000
 
 
 def test_find_latest_inventory_csv_selects_newest(tmp_path):
@@ -555,6 +803,10 @@ class FakeDriveFiles:
         if "mimeType = 'application/vnd.google-apps.folder'" in query:
             for file in self.drive._files.values():
                 if file.get("mimeType") == "application/vnd.google-apps.folder":
+                    files.append(file)
+        else:
+            for file in self.drive._files.values():
+                if file.get("mimeType") != "application/vnd.google-apps.folder":
                     files.append(file)
         return FakeExecute({"files": files})
 
