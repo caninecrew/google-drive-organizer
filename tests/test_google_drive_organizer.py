@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import _resolve_path
@@ -129,9 +131,16 @@ def test_move_requires_exact_approve_move():
             }
         ]
     )
-    results = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
     assert results == []
     assert drive.update_calls == []
+    assert evaluated_count == 1
+    assert plan_path.exists()
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["outcome"] == "SKIPPED"
+    assert rows[0]["reason"] == "review_decision is not APPROVE_MOVE"
+    assert rows[0]["current_path"] == ""
 
 
 def test_blank_destination_is_skipped():
@@ -151,9 +160,43 @@ def test_blank_destination_is_skipped():
             }
         ]
     )
-    results = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
     assert results == [("file-1", "skipped", "missing destination")]
     assert drive.update_calls == []
+    assert evaluated_count == 1
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["outcome"] == "SKIPPED"
+    assert rows[0]["reason"] in {"final destination is blank", "review_decision is not APPROVE_MOVE"}
+
+
+def test_dry_run_produces_would_move_without_update_call():
+    drive = FakeDriveService(
+        files={
+            "file-1": {"id": "file-1", "name": "doc.txt", "mimeType": "text/plain", "parents": ["parent-1"]},
+            "dest-1": {"id": "dest-1", "name": "01 Personal", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+        }
+    )
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "doc.txt",
+                "review_decision": "APPROVE_MOVE",
+                "suggested_destination": "01 Personal",
+                "current_path": "My Drive/Docs/doc.txt",
+                "parents": "parent-1",
+            }
+        ]
+    )
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
+    assert results == [("file-1", "would_move", "01 Personal")]
+    assert drive.update_calls == []
+    assert evaluated_count == 1
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["outcome"] == "WOULD_MOVE"
+    assert rows[0]["current_path"] == "My Drive/Docs/doc.txt"
 
 
 def test_drive_activity_missing_fields_returns_unknown():
@@ -168,6 +211,15 @@ class FakeDriveFiles:
 
     def get(self, fileId, fields):
         return FakeExecute(self.drive._files[fileId])
+
+    def list(self, **kwargs):
+        query = kwargs.get("q", "")
+        files = []
+        if "mimeType = 'application/vnd.google-apps.folder'" in query:
+            for file in self.drive._files.values():
+                if file.get("mimeType") == "application/vnd.google-apps.folder":
+                    files.append(file)
+        return FakeExecute({"files": files})
 
     def update(self, **kwargs):
         self.drive.update_calls.append(kwargs)

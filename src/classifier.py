@@ -65,7 +65,7 @@ def _path_signal(path_text: str) -> str | None:
     path = _normalize(path_text)
     if not path:
         return None
-    if _contains_any(path, ["foia", "public records", "open records", "records request", "attorney general", "request", "appeal", "pac"]):
+    if _contains_any(path, ["foia", "public records", "open records", "records request", "attorney general", "appeal", "pac"]):
         return "FOIA and Public Records"
     if _contains_any(path, ["resume", "career", "job", "gideons", "onboarding", "resident assistant", "substitute", "ra"]):
         return "Work and Career"
@@ -77,7 +77,7 @@ def _path_signal(path_text: str) -> str | None:
         return "School and Education"
     if _contains_any(path, ["python", "github", "code", "project", "records tracker", "phase 10", "portfolio", "sql", "flask"]):
         return "Projects and Coding"
-    if _contains_any(path, ARCHIVE_PATH_HINTS) or "archive" in path:
+    if _contains_any(path, ARCHIVE_PATH_HINTS) or "archive" in path or "old" in path or "childhood" in path:
         return "Archive"
     return None
 

@@ -72,7 +72,7 @@ def cmd_move_approved(args):
     creds = get_credentials()
     drive = get_drive_service(creds)
     sheets = get_sheets_service(creds)
-    results = move_approved_rows(
+    results, plan_path, evaluated_count = move_approved_rows(
         drive,
         sheets,
         args.spreadsheet_id,
@@ -94,13 +94,13 @@ def cmd_move_approved(args):
             print(f"{status.upper()}: {_file_id} -> {detail}")
         else:
             print(f"{status.upper()}: {_file_id} -> {detail}")
-    print(
-        "Move summary: "
-        f"{summary['would_move']} would move, "
-        f"{summary['moved']} moved, "
-        f"{summary['skipped']} skipped, "
-        f"{summary['error']} errors."
-    )
+    print("Move summary:")
+    print(f"  rows evaluated: {evaluated_count}")
+    print(f"  WOULD_MOVE: {summary['would_move']}")
+    print(f"  MOVED: {summary['moved']}")
+    print(f"  SKIPPED: {summary['skipped']}")
+    print(f"  ERROR: {summary['error']}")
+    print(f"  move plan CSV: {plan_path}")
 
 
 def build_parser():

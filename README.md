@@ -77,6 +77,8 @@ Move approved rows from a review spreadsheet, with a dry run first:
 python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 ```
 
+Every `move-approved` run writes a move plan CSV under `data/logs/` with the proposed or completed actions, including `current_path`, destination, and reason codes for skipped rows.
+
 ## Review workflow
 
 1. Run inventory.
@@ -84,7 +86,8 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 3. Review suggestions and set `review_decision` to `APPROVE_MOVE` only for rows you want moved.
 4. Set `final_destination` if you want to override the suggested destination.
 5. Run `move-approved` with `--dry-run` first.
-6. Run `move-approved` without `--dry-run` only after confirming the dry run output.
+6. Review the generated move plan CSV before making any real changes.
+7. Run `move-approved` without `--dry-run` only after confirming the dry run output.
 
 ## Why `current_path` matters
 
