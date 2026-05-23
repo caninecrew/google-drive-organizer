@@ -193,6 +193,8 @@ def cmd_bulk_prepare_safe(args):
         include_medium_confidence=args.include_medium_confidence,
         include_low_confidence=args.include_low_confidence,
         limit=args.limit,
+        shared_file_strategy=args.shared_file_strategy,
+        owned_only=args.owned_only,
     )
     print("Bulk prepare summary:")
     print(f"  total rows evaluated: {result['total_rows']}")
@@ -200,6 +202,12 @@ def cmd_bulk_prepare_safe(args):
     print(f"  rows that would be marked APPROVE_MOVE: {result['approve_count']}")
     print(f"  rows that would be marked NEEDS_REVIEW: {result['needs_review_count']}")
     print(f"  rows left unchanged: {result['unchanged_count']}")
+    print(f"  owned_by_me TRUE count: {result['owned_true_count']}")
+    print(f"  owned_by_me FALSE count: {result['owned_false_count']}")
+    print(f"  rows with all move capability fields TRUE: {result['all_capable_true_count']}")
+    print(f"  rows blocked only because not owned: {result['blocked_only_by_not_owned']}")
+    print(f"  rows blocked by low confidence: {result['blocked_by_low_confidence']}")
+    print(f"  rows blocked by sensitivity: {result['blocked_by_sensitivity']}")
     print("  top destination counts:")
     for destination, count in result["top_destinations"]:
         print(f"    {destination}: {count}")
@@ -234,6 +242,8 @@ def build_parser():
     bulk.add_argument("--include-medium-confidence", action=argparse.BooleanOptionalAction, default=True)
     bulk.add_argument("--include-low-confidence", action="store_true")
     bulk.add_argument("--limit", type=int)
+    bulk.add_argument("--shared-file-strategy", choices=["skip", "allow-capable"], default="skip")
+    bulk.add_argument("--owned-only", action="store_true")
     return parser
 
 

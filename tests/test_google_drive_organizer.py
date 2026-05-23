@@ -843,7 +843,7 @@ def test_low_confidence_row_becomes_needs_review(tmp_path):
     with result["plan_path"].open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
-    assert rows[0]["reason"] == "low confidence"
+    assert "low confidence" in rows[0]["reason"]
 
 
 def test_sensitive_row_becomes_needs_review(tmp_path):
@@ -968,7 +968,7 @@ def test_untitled_row_becomes_needs_review(tmp_path):
     with result["plan_path"].open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
-    assert rows[0]["reason"] == "low confidence"
+    assert "low confidence" in rows[0]["reason"]
 
 
 def test_blank_final_destination_row_becomes_needs_review(tmp_path):
@@ -1314,6 +1314,122 @@ def test_safe_bulk_prepare_marks_safe_row_approve_move(tmp_path):
         rows = list(csv.DictReader(f))
     assert rows[0]["final_destination_planned"] == "03 Work and Career"
     assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
+    assert rows[0]["reason"] in {"safe", "suggested_destination", "existing final_destination preserved"}
+
+
+def test_bulk_prepare_shared_skip_blocks_not_owned_rows(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-30a",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True, shared_file_strategy="skip")
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["review_decision_planned"] == "NEEDS_REVIEW"
+    assert "not owned by me" in rows[0]["reason"]
+
+
+def test_bulk_prepare_allow_capable_can_approve_not_owned_rows(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-30b",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True, shared_file_strategy="allow-capable")
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
+
+
+def test_bulk_prepare_allow_capable_blocks_missing_capability(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-30c",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "False",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True, shared_file_strategy="allow-capable")
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["review_decision_planned"] == "NEEDS_REVIEW"
+    assert "missing capability: canAddMyDriveParent" in rows[0]["reason"]
+
+
+def test_bulk_prepare_owned_only_blocks_not_owned_rows(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-30d",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "mime_type": "application/pdf",
+                "suggested_role": "Work and Career",
+                "suggested_destination": "03 Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True, owned_only=True, shared_file_strategy="allow-capable")
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["review_decision_planned"] == "NEEDS_REVIEW"
+    assert "owned-only" in rows[0]["reason"]
 
 
 def test_safe_bulk_prepare_marks_risky_rows_needs_review(tmp_path):
@@ -1339,6 +1455,7 @@ def test_safe_bulk_prepare_marks_risky_rows_needs_review(tmp_path):
     with result["plan_path"].open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["review_decision_planned"] == "NEEDS_REVIEW"
+    assert "low confidence" in rows[0]["reason"]
 
 
 def test_bulk_prepare_skips_shortcuts_not_owned_unknown_parent_sensitive_and_untitled(tmp_path):
@@ -1420,6 +1537,11 @@ def test_bulk_prepare_skips_shortcuts_not_owned_unknown_parent_sensitive_and_unt
     with result["plan_path"].open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert all(row["review_decision_planned"] == "NEEDS_REVIEW" for row in rows[0:5])
+    assert "shortcut" in rows[0]["reason"]
+    assert "not owned by me" in rows[1]["reason"]
+    assert "unknown parent" in rows[2]["reason"]
+    assert "non-normal sensitivity" in rows[3]["reason"]
+    assert "untitled filename" in rows[4]["reason"]
 
 
 def test_bulk_prepare_existing_final_destination_is_preserved(tmp_path):
@@ -1445,6 +1567,7 @@ def test_bulk_prepare_existing_final_destination_is_preserved(tmp_path):
     with result["plan_path"].open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["final_destination_planned"] == "03 Work and Career"
+    assert rows[0]["review_decision_planned"] == "APPROVE_MOVE"
 
 
 def test_bulk_prepare_media_rules_apply(tmp_path):
@@ -1523,6 +1646,34 @@ def test_bulk_prepare_dry_run_writes_no_sheet_updates(tmp_path):
     )
     bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
     assert sheets.update_calls == []
+
+
+def test_bulk_prepare_writes_semicolon_risk_reasons(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-43",
+                "name": "Untitled document",
+                "current_path": "Unknown Parent/Untitled document",
+                "mime_type": "application/vnd.google-apps.document",
+                "suggested_role": "Review Later",
+                "suggested_destination": "",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Needs Sensitive Review",
+                "owned_by_me": "False",
+                "is_shortcut": "True",
+                "final_destination": "",
+                "review_decision": "",
+                "capabilities_can_move_item_within_drive": "False",
+                "capabilities_can_add_my_drive_parent": "False",
+                "capabilities_can_remove_my_drive_parent": "False",
+            }
+        ]
+    )
+    result = bulk_prepare_safe(sheets, "sheet-1", str(tmp_path), True)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert ";" in rows[0]["reason"]
 
 
 def test_bulk_prepare_never_sets_delete_later(tmp_path):

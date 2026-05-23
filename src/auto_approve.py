@@ -88,32 +88,72 @@ def _has_unknown_parent(current_path: str) -> bool:
     return "unknown parent" in path or "[unresolved parent]" in path
 
 
-def _is_safe_for_auto_approve(row: dict) -> tuple[bool, str]:
-    file_id = row.get("file_id", "")
-    if not file_id:
-        return False, "missing file_id"
-    if not row.get("final_destination", "").strip():
-        return False, "blank final_destination"
-    if row.get("suggested_confidence", "") not in {"High", "Medium"}:
-        return False, "low confidence"
+def _collect_bulk_risk_reasons(
+    row: dict,
+    *,
+    include_medium_confidence: bool,
+    include_low_confidence: bool,
+    owned_only: bool,
+    shared_file_strategy: str,
+) -> list[str]:
+    reasons: list[str] = []
+    final_destination = row.get("final_destination", "").strip()
+    if not final_destination:
+        reasons.append("blank final_destination")
+    confidence = row.get("suggested_confidence", "")
+    if confidence == "Low":
+        if not include_low_confidence:
+            reasons.append("low confidence")
+    elif confidence == "Medium":
+        if not include_medium_confidence:
+            reasons.append("medium confidence excluded")
+    else:
+        if confidence not in {"High", "Medium"}:
+            reasons.append("low confidence")
     if row.get("suggested_sensitivity", "") != "Normal":
-        return False, "non-normal sensitivity"
-    if not _truthy(row.get("owned_by_me", "")):
-        return False, "not owned by me"
+        reasons.append("non-normal sensitivity")
+    owned_by_me = _truthy(row.get("owned_by_me", ""))
+    if owned_only and not owned_by_me:
+        reasons.append("owned-only")
+    if not owned_by_me:
+        if shared_file_strategy == "skip":
+            reasons.append("not owned by me")
+        elif shared_file_strategy == "allow-capable":
+            capable = (
+                _truthy(row.get("capabilities_can_move_item_within_drive", ""))
+                and _truthy(row.get("capabilities_can_add_my_drive_parent", ""))
+                and _truthy(row.get("capabilities_can_remove_my_drive_parent", ""))
+            )
+            if not capable:
+                if not _truthy(row.get("capabilities_can_move_item_within_drive", "")):
+                    reasons.append("missing capability: canMoveItemWithinDrive")
+                if not _truthy(row.get("capabilities_can_add_my_drive_parent", "")):
+                    reasons.append("missing capability: canAddMyDriveParent")
+                if not _truthy(row.get("capabilities_can_remove_my_drive_parent", "")):
+                    reasons.append("missing capability: canRemoveMyDriveParent")
+        else:
+            reasons.append("not owned by me")
     if _truthy(row.get("is_shortcut", "")):
-        return False, "shortcut"
+        reasons.append("shortcut")
     if _has_unknown_parent(row.get("current_path", "")):
-        return False, "unknown parent"
+        reasons.append("unknown parent")
     if "untitled" in row.get("name", "").lower():
-        return False, "untitled filename"
+        reasons.append("untitled filename")
     if row.get("mime_type", "") == "application/vnd.google-apps.folder":
-        return False, "folder"
-    if "capabilities_can_move_item_within_drive" in row and not _truthy(row.get("capabilities_can_move_item_within_drive", "")):
-        return False, "missing move capability"
-    if "capabilities_can_add_my_drive_parent" in row and not _truthy(row.get("capabilities_can_add_my_drive_parent", "")):
-        return False, "missing move capability"
-    if "capabilities_can_remove_my_drive_parent" in row and not _truthy(row.get("capabilities_can_remove_my_drive_parent", "")):
-        return False, "missing move capability"
+        reasons.append("folder")
+    return reasons
+
+
+def _is_safe_for_auto_approve(row: dict) -> tuple[bool, str]:
+    reasons = _collect_bulk_risk_reasons(
+        row,
+        include_medium_confidence=True,
+        include_low_confidence=False,
+        owned_only=False,
+        shared_file_strategy="skip",
+    )
+    if reasons:
+        return False, "; ".join(reasons)
     return True, "safe"
 
 
@@ -121,7 +161,8 @@ def _plan_review_decision(row: dict) -> tuple[str, str]:
     safe, reason = _is_safe_for_auto_approve(row)
     if safe:
         return "APPROVE_MOVE", "safe"
-    if reason in {"low confidence", "non-normal sensitivity", "unknown parent", "shortcut", "not owned by me", "missing move capability", "untitled filename", "blank final_destination"}:
+    reason_bits = {part.strip() for part in reason.split(";") if part.strip()}
+    if reason_bits & {"low confidence", "medium confidence excluded", "non-normal sensitivity", "unknown parent", "shortcut", "not owned by me", "missing move capability", "untitled filename", "blank final_destination", "folder", "owned-only", "missing capability: canMoveItemWithinDrive", "missing capability: canAddMyDriveParent", "missing capability: canRemoveMyDriveParent"}:
         return "NEEDS_REVIEW", reason
     return "REVIEW", reason
 
@@ -353,16 +394,24 @@ def _planned_destination_for_bulk(row: dict) -> tuple[str, str]:
     return planned, reason
 
 
-def _safe_to_approve_bulk(row: dict, planned_final_destination: str, include_medium_confidence: bool, include_low_confidence: bool) -> tuple[bool, str]:
+def _safe_to_approve_bulk(
+    row: dict,
+    planned_final_destination: str,
+    include_medium_confidence: bool,
+    include_low_confidence: bool,
+    owned_only: bool,
+    shared_file_strategy: str,
+) -> tuple[bool, list[str]]:
+    reasons = _collect_bulk_risk_reasons(
+        {**row, "final_destination": planned_final_destination},
+        include_medium_confidence=include_medium_confidence,
+        include_low_confidence=include_low_confidence,
+        owned_only=owned_only,
+        shared_file_strategy=shared_file_strategy,
+    )
     if not planned_final_destination:
-        return False, "blank final_destination"
-    confidence = row.get("suggested_confidence", "")
-    if confidence == "Low" and not include_low_confidence:
-        return False, "low confidence"
-    if confidence == "Medium" and not include_medium_confidence:
-        return False, "medium confidence excluded"
-    safe, reason = _is_safe_for_auto_approve({**row, "final_destination": planned_final_destination})
-    return safe, reason
+        reasons.insert(0, "blank final_destination")
+    return (len(reasons) == 0), reasons
 
 
 def bulk_prepare_safe(
@@ -373,6 +422,8 @@ def bulk_prepare_safe(
     include_medium_confidence: bool = True,
     include_low_confidence: bool = False,
     limit: int | None = None,
+    shared_file_strategy: str = "skip",
+    owned_only: bool = False,
 ):
     headers, rows = _read_sheet_rows(sheets_service, spreadsheet_id)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
@@ -386,6 +437,13 @@ def bulk_prepare_safe(
     unchanged_count = 0
     reasons = Counter()
     destination_counts = Counter()
+    owned_true_count = 0
+    owned_false_count = 0
+    all_capable_true_count = 0
+    blocked_only_by_not_owned = 0
+    blocked_by_low_confidence = 0
+    blocked_by_sensitivity = 0
+    planned_reason_rows = []
     review_column = None
     destination_column = None
     if headers and "review_decision" in headers:
@@ -402,9 +460,28 @@ def bulk_prepare_safe(
         if not current_final and planned_final:
             filled_count += 1
             destination_counts[planned_final] += 1
-        safe, approval_reason = _safe_to_approve_bulk(row, planned_final, include_medium_confidence, include_low_confidence)
+        owned_by_me = _truthy(row.get("owned_by_me", ""))
+        if owned_by_me:
+            owned_true_count += 1
+        else:
+            owned_false_count += 1
+        all_capable_true = (
+            _truthy(row.get("capabilities_can_move_item_within_drive", ""))
+            and _truthy(row.get("capabilities_can_add_my_drive_parent", ""))
+            and _truthy(row.get("capabilities_can_remove_my_drive_parent", ""))
+        )
+        if all_capable_true:
+            all_capable_true_count += 1
+        safe, approval_reasons = _safe_to_approve_bulk(
+            row,
+            planned_final,
+            include_medium_confidence,
+            include_low_confidence,
+            owned_only,
+            shared_file_strategy,
+        )
         planned_review = current_review
-        reason = destination_reason
+        reason_parts = [destination_reason] if destination_reason else []
         if safe and (limit is None or safe_seen < limit):
             planned_review = "APPROVE_MOVE"
             approve_count += 1
@@ -414,16 +491,25 @@ def bulk_prepare_safe(
             elif not dry_run:
                 updates.append((row["_row_number"], planned_final, planned_review))
         else:
+            reason_parts.extend(approval_reasons)
             if current_review != "NEEDS_REVIEW":
                 planned_review = "NEEDS_REVIEW"
                 if not dry_run:
                     updates.append((row["_row_number"], planned_final, planned_review))
             needs_review_count += 1
-            reason = approval_reason if not safe else "max limit reached"
+            if not safe and "not owned by me" in approval_reasons and len(approval_reasons) == 1:
+                blocked_only_by_not_owned += 1
+            if "low confidence" in approval_reasons:
+                blocked_by_low_confidence += 1
+            if "non-normal sensitivity" in approval_reasons:
+                blocked_by_sensitivity += 1
+            if safe:
+                reason_parts = ["max limit reached"]
         if current_final and current_final == planned_final and current_review == planned_review:
             unchanged_count += 1
-        if not planned_final:
-            reason = approval_reason if not safe else destination_reason
+        reason = "; ".join([part for part in reason_parts if part])
+        if not reason:
+            reason = "safe"
         plan_rows.append(
             {
                 "file_id": row.get("file_id", ""),
@@ -443,7 +529,8 @@ def bulk_prepare_safe(
                 "reason": reason,
             }
         )
-        reasons[reason] += 1
+        reasons.update(reason_parts if reason_parts else [reason])
+        planned_reason_rows.append(reason)
     _write_bulk_plan_csv(plan_path, plan_rows)
     if not dry_run:
         for row_number, destination, review_decision in updates:
@@ -467,6 +554,12 @@ def bulk_prepare_safe(
         "approve_count": approve_count,
         "needs_review_count": needs_review_count,
         "unchanged_count": unchanged_count,
+        "owned_true_count": owned_true_count,
+        "owned_false_count": owned_false_count,
+        "all_capable_true_count": all_capable_true_count,
+        "blocked_only_by_not_owned": blocked_only_by_not_owned,
+        "blocked_by_low_confidence": blocked_by_low_confidence,
+        "blocked_by_sensitivity": blocked_by_sensitivity,
         "top_destinations": destination_counts.most_common(5),
         "top_reasons": reasons.most_common(5),
         "plan_path": plan_path,

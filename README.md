@@ -104,6 +104,7 @@ Safe bulk approval workflow:
 python -m src.main fill-destinations --spreadsheet-id SPREADSHEET_ID --dry-run
 python -m src.main fill-destinations --spreadsheet-id SPREADSHEET_ID
 python -m src.main bulk-prepare-safe --spreadsheet-id SPREADSHEET_ID --dry-run
+python -m src.main bulk-prepare-safe --spreadsheet-id SPREADSHEET_ID --dry-run --shared-file-strategy allow-capable
 python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --dry-run --max-approve 10
 python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --max-approve 10
 python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
@@ -122,6 +123,13 @@ Recommended steps:
 9. Review the move plan CSV.
 10. Run a real move only for that tiny approved batch.
 11. Increase the batch size gradually after reviewing each pass.
+
+Safety notes:
+
+- `owned-only` is the safest setting for bulk approval.
+- `shared-file-strategy skip` is the safest setting for shared files.
+- `shared-file-strategy allow-capable` can approve not-owned files only when Google Drive capability fields confirm the file can be moved.
+- Low confidence, sensitive, shortcut, unknown-parent, folder, and Untitled rows still stay out of approval.
 
 Summarize an exported inventory CSV before moving:
 
