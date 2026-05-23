@@ -109,6 +109,10 @@ python -m src.main summarize --csv data/exports/inventory_YYYY-MM-DD_HHMMSS.csv 
 - `current_path` helps review old, ambiguous, or inherited files without forcing them into archive buckets too early.
 - `Untitled` usually means manual review unless the folder path gives clear context.
 - `Project` alone does not mean coding, and `Application` alone does not mean career.
+- `Academic and Career` is treated as mixed context, so the folder path alone does not force Work and Career.
+- `transcript` only means School Record in an academic-record context.
+- `bank` only means Financial when there is actual financial/account/tax/payment context.
+- Phase 10 score sheets are not automatically coding projects.
 - Low-confidence rows should be reviewed manually before any move is approved.
 
 ## First Real Run Checklist

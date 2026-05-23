@@ -107,6 +107,25 @@ def test_path_based_classification_overrides_goofy_filename():
     assert confidence == "Medium"
 
 
+def test_academic_and_career_path_is_mixed_context():
+    role, sensitivity, destination, confidence = classify_file(
+        "Chapter 17 - Cheat Sheet",
+        "application/pdf",
+        current_path="My Drive/Academic and Career/Accounting 2",
+    )
+    assert role in {"School and Education", "Review Later"}
+    assert role != "Work and Career"
+
+
+def test_academic_and_career_path_can_still_classify_career_files():
+    role, sensitivity, destination, confidence = classify_file(
+        "Resume 2026",
+        "application/pdf",
+        current_path="My Drive/Academic and Career/Job Search",
+    )
+    assert role == "Work and Career"
+
+
 def test_resume_goes_to_work():
     role, sensitivity, destination, confidence = classify_file("Resume 2026.pdf", "application/pdf")
     assert role == "Work and Career"
@@ -210,6 +229,36 @@ def test_incident_report_sensitive():
     assert sensitivity in {"Needs Sensitive Review", "Student Information"}
 
 
+def test_code_of_conduct_is_not_automatically_sensitive():
+    role, sensitivity, destination, confidence = classify_file("Personal Code of Conduct", "application/pdf")
+    assert sensitivity == "Normal"
+
+
+def test_linus_slow_motion_fall_is_normal():
+    role, sensitivity, destination, confidence = classify_file("Linus Slow Motion Fall.mp4", "video/mp4")
+    assert sensitivity == "Normal"
+
+
+def test_transcript_of_public_statement_not_school_record():
+    role, sensitivity, destination, confidence = classify_file("Transcript of Iskall's public statement 2025-01-30", "application/pdf")
+    assert sensitivity != "School Record"
+
+
+def test_academic_transcripts_still_school_record():
+    role, sensitivity, destination, confidence = classify_file("Rumbley-TN Tech Transcript.pdf", "application/pdf")
+    assert sensitivity == "School Record"
+
+
+def test_wilson_bank_and_trust_sponsor_letter_not_financial():
+    role, sensitivity, destination, confidence = classify_file("Letter to Sponsor (Wilson Bank and Trust)", "application/pdf")
+    assert sensitivity in {"Normal", "Needs Sensitive Review", "Legal/Public Records"}
+
+
+def test_phase_10_score_sheet_not_automatically_coding():
+    role, sensitivity, destination, confidence = classify_file("Phase 10 Score Sheet", "application/pdf")
+    assert role in {"Review Later", "Personal", "Archive"}
+
+
 def test_path_builder_handles_missing_parent_safely():
     current_path, note = _resolve_path({"name": "notes.docx", "parents": ["missing-parent"]}, folder_cache={})
     assert current_path == "Unknown Parent/notes.docx"
@@ -236,6 +285,24 @@ def test_path_builder_resolves_readable_path_order():
     current_path, note = _resolve_path({"name": "notes.docx", "parents": ["folder-1"]}, folder_cache=folder_cache)
     assert current_path == "My Drive/Tennessee Tech/DS 4250/notes.docx"
     assert note == ""
+
+
+def test_path_builder_normalizes_duplicate_my_drive_prefix():
+    drive = FakeDriveService(
+        files={
+            "folder-2": {"id": "folder-2", "name": "My Drive", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+            "folder-1": {"id": "folder-1", "name": "Folder", "mimeType": "application/vnd.google-apps.folder", "parents": ["folder-2"]},
+        }
+    )
+    current_path, note = _resolve_path({"name": "File", "parents": ["folder-1"]}, folder_cache={}, drive_service=drive)
+    assert current_path == "My Drive/Folder/File"
+    assert note == ""
+
+
+def test_path_builder_keeps_unknown_parent_prefix():
+    current_path, note = _resolve_path({"name": "File", "parents": []}, folder_cache={})
+    assert current_path == "Unknown Parent/File"
+    assert note == "no parents"
 
 
 def test_move_requires_exact_approve_move():

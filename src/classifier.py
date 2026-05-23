@@ -22,7 +22,7 @@ ROLE_KEYWORDS = {
     "Scouting": ["scout", "scouting", "bsa", "oa", "order of the arrow", "wa-hi-nasa", "boxwell", "camp", "troop", "lodge", "merit badge", "eagle"],
     "Church and Ministry": ["church", "nazarene", "grace", "ministry", "sermon", "lesson", "vbs", "mission", "kenya", "youth", "children"],
     "FOIA and Public Records": ["foia", "public records", "open records", "appeal", "pac", "attorney general", "records request", "response letter"],
-    "Projects and Coding": ["python", "github", "code", "coding", "records tracker", "phase 10", "portfolio website", ".py", ".ipynb", ".js", ".html", "database", "api", "sql", "flask"],
+    "Projects and Coding": ["python", "github", "code", "coding", "records tracker", "portfolio website", ".py", ".ipynb", ".js", ".html", "database", "api", "sql", "flask", "development", "app"],
     "Photos and Media": ["jpg", "jpeg", "png", "heic", "mp4", "mov", "image", "video", "photo"],
     "Work and Career": ["resume", "cover letter", "curriculum vitae", "cv", "job application", "employment", "gideons", "onboarding", "offer letter", "reference list", "substitute teaching", "resident assistant"],
 }
@@ -53,7 +53,7 @@ def _contains_any(text: str, keywords) -> bool:
         if " " in keyword or "." in keyword:
             if keyword in text:
                 return True
-        elif len(keyword) <= 2:
+        elif len(keyword) <= 4:
             if re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text):
                 return True
         elif keyword in text:
@@ -72,6 +72,8 @@ def _weak_untitled(text: str) -> bool:
 def _path_signal(path_text: str) -> str | None:
     path = _normalize(path_text)
     if not path:
+        return None
+    if "academic and career" in path:
         return None
     if _contains_any(path, ["foia", "public records", "open records", "records request", "attorney general", "appeal", "pac"]):
         return "FOIA and Public Records"
@@ -97,13 +99,13 @@ def _work_context_signal(text: str, path_text: str) -> bool:
 
 
 def _projects_context_signal(text: str, path_text: str) -> bool:
-    tech_terms = ["python", "github", "code", "coding", "records tracker", "phase 10", "portfolio website", ".py", ".ipynb", ".js", ".html", "database", "api", "sql", "flask"]
+    tech_terms = ["python", "github", "code", "coding", "records tracker", "portfolio website", ".py", ".ipynb", ".js", ".html", "database", "api", "sql", "flask", "development", "app"]
     return _contains_any(text, tech_terms) or _contains_any(path_text, tech_terms)
 
 
 def _school_context_signal(text: str, path_text: str) -> bool:
     school_terms = ["ttu", "tennessee tech", "vol state", "transcript", "graduation", "ds", "bit"]
-    return _contains_any(text, school_terms) or _contains_any(path_text, ["school", "ttu", "tennessee tech", "vol state", "class", "course"])
+    return _contains_any(text, school_terms) or _contains_any(path_text, ["school", "ttu", "tennessee tech", "vol state", "class", "course", "academic and career"])
 
 
 def classify_file(name: str, mime_type: str, current_path: str = "") -> tuple[str, str, str, str]:
@@ -144,10 +146,31 @@ def classify_file(name: str, mime_type: str, current_path: str = "") -> tuple[st
             suggested_role = "Review Later"
             suggested_destination = "99 Review Later"
             suggested_confidence = "Low"
+        elif "academic and career" in path_text:
+            if _work_context_signal(text, path_text):
+                suggested_role = "Work and Career"
+                suggested_destination = role_to_destination("Work and Career")
+                suggested_confidence = "High"
+            elif _school_context_signal(text, path_text) or _contains_any(name_text, ["acct", "accounting", "cheat sheet", "study"]):
+                suggested_role = "School and Education"
+                suggested_destination = role_to_destination("School and Education")
+                suggested_confidence = "Medium"
+            else:
+                suggested_role = "Review Later"
+                suggested_destination = "99 Review Later"
+                suggested_confidence = "Low"
         elif _work_context_signal(text, path_text):
             suggested_role = "Work and Career"
             suggested_destination = role_to_destination("Work and Career")
             suggested_confidence = "High"
+        elif "phase 10" in text and not _contains_any(path_text, ["python", "github", "code", "coding", "development", "app"]):
+            suggested_role = "Review Later"
+            suggested_destination = "99 Review Later"
+            suggested_confidence = "Low"
+        elif "phase 10" in text and not _projects_context_signal(text, path_text):
+            suggested_role = "Review Later"
+            suggested_destination = "99 Review Later"
+            suggested_confidence = "Low"
         elif _projects_context_signal(text, path_text):
             suggested_role = "Projects and Coding"
             suggested_destination = role_to_destination("Projects and Coding")
@@ -168,13 +191,20 @@ def classify_file(name: str, mime_type: str, current_path: str = "") -> tuple[st
 
     suggested_sensitivity = "Normal"
     if _contains_any(text, ["transcript"]):
-        suggested_sensitivity = "School Record"
-    elif _contains_any(text, ["student id", "student record", "roster", "grade", "grades", "resident incident", "conduct", "ferpa"]):
+        if _contains_any(text, ["high school transcript", "tn tech transcript", "tennessee tech transcript", "academic transcript", "ttu transcript", "school transcript"]) or _contains_any(path_text, ["school", "ttu", "tennessee tech", "vol state", "academic"]):
+            suggested_sensitivity = "School Record"
+    if _contains_any(text, ["student id", "student record", "roster", "grade", "grades", "resident incident", "ferpa"]):
         suggested_sensitivity = "Student Information"
+    elif _contains_any(text, ["conduct"]):
+        if _contains_any(text, ["code of conduct", "personal code of conduct"]):
+            suggested_sensitivity = "Normal"
+        elif _contains_any(path_text, ["student", "resident", "school"]) or _contains_any(text, ["student", "resident", "discipline", "case", "incident"]):
+            suggested_sensitivity = "Needs Sensitive Review"
     elif _contains_any(text, ["incident", "medical", "ssn", "social security", "driver license"]):
         suggested_sensitivity = "Needs Sensitive Review"
     elif _contains_any(text, ["tax", "bank"]):
-        suggested_sensitivity = "Financial"
+        if _contains_any(text, ["bank statement", "bank account", "banking", "invoice", "receipt", "budget", "payment", "tax return", "financial aid"]) or _contains_any(path_text, ["finance", "financial", "bank", "tax"]):
+            suggested_sensitivity = "Financial"
     elif _contains_any(text, ["password", "credential", "id card"]):
         suggested_sensitivity = "Credentials or ID"
     elif _contains_any(text, ["foia", "public records", "open records", "request", "appeal", "records request", "response letter"]):
@@ -191,6 +221,8 @@ def classify_file(name: str, mime_type: str, current_path: str = "") -> tuple[st
     if "unknown parent" in current_path.lower() or "[unresolved parent]" in current_path.lower():
         if suggested_confidence == "High":
             suggested_confidence = "Medium"
+    if "academic and career" in path_text and suggested_confidence == "High" and suggested_role in {"School and Education", "Review Later"}:
+        suggested_confidence = "Medium"
     if _weak_untitled(name_text) and path_signal is None and suggested_role == "Archive":
         suggested_role = "Review Later"
         suggested_destination = "99 Review Later"

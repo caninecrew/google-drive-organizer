@@ -116,6 +116,8 @@ def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]], 
     if not folder_names:
         return f"Unknown Parent/{name}", base or "unresolved parent"
     path = "/".join(["My Drive", *reversed(folder_names), name])
+    while "My Drive/My Drive/" in path:
+        path = path.replace("My Drive/My Drive/", "My Drive/")
     return path, base
 
 
