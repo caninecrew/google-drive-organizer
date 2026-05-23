@@ -15,6 +15,11 @@ PLAN_HEADER = [
     "file_id",
     "name",
     "current_path",
+    "review_decision",
+    "owned_by_me",
+    "capabilities_can_move_item_within_drive",
+    "capabilities_can_add_my_drive_parent",
+    "capabilities_can_remove_my_drive_parent",
     "original_parents",
     "destination_path",
     "destination_folder_id",
@@ -40,7 +45,24 @@ def _log_attempt(log_path: Path, row: dict, action: str, status: str, message: s
         })
 
 
-def _write_move_plan_row(plan_path: Path, *, mode: str, outcome: str, reason: str, file_id: str, name: str, current_path: str, original_parents: str, destination_path: str, destination_folder_id: str):
+def _write_move_plan_row(
+    plan_path: Path,
+    *,
+    mode: str,
+    outcome: str,
+    reason: str,
+    file_id: str,
+    name: str,
+    current_path: str,
+    review_decision: str,
+    owned_by_me: str,
+    capabilities_can_move_item_within_drive: str,
+    capabilities_can_add_my_drive_parent: str,
+    capabilities_can_remove_my_drive_parent: str,
+    original_parents: str,
+    destination_path: str,
+    destination_folder_id: str,
+):
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     exists = plan_path.exists()
     with plan_path.open("a", newline="", encoding="utf-8") as f:
@@ -56,11 +78,104 @@ def _write_move_plan_row(plan_path: Path, *, mode: str, outcome: str, reason: st
                 "file_id": file_id,
                 "name": name,
                 "current_path": current_path,
+                "review_decision": review_decision,
+                "owned_by_me": owned_by_me,
+                "capabilities_can_move_item_within_drive": capabilities_can_move_item_within_drive,
+                "capabilities_can_add_my_drive_parent": capabilities_can_add_my_drive_parent,
+                "capabilities_can_remove_my_drive_parent": capabilities_can_remove_my_drive_parent,
                 "original_parents": original_parents,
                 "destination_path": destination_path,
                 "destination_folder_id": destination_folder_id,
             }
         )
+
+
+def _value_is_blank(value: str) -> bool:
+    return str(value).strip() == ""
+
+
+def _capability_value(row_or_meta: dict, key: str) -> str:
+    value = row_or_meta.get(key, "")
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def evaluate_move_eligibility(
+    row: dict,
+    *,
+    destination_path: str,
+    destination_folder_id: str = "",
+    original_parents: list[str] | tuple[str, ...] | None = None,
+    allow_move_folders: bool = False,
+    allow_move_shortcuts: bool = False,
+    shared_file_strategy: str = "skip",
+    owned_only: bool = False,
+    current_metadata: dict | None = None,
+):
+    meta = current_metadata or row
+    reasons: list[str] = []
+    if not row.get("file_id", "").strip():
+        reasons.append("missing file_id")
+    if not str(row.get("review_decision", "")).strip() == "APPROVE_MOVE":
+        reasons.append("review_decision is not APPROVE_MOVE")
+    if _value_is_blank(destination_path):
+        reasons.append("final destination is blank")
+    if _value_is_blank(destination_folder_id):
+        reasons.append("destination folder could not be resolved")
+    parents = list(original_parents or [])
+    if not parents:
+        reasons.append("file has no parents")
+    if len(parents) > 1:
+        reasons.append("file has multiple parents")
+    mime_type = str(meta.get("mimeType", row.get("mime_type", "")))
+    if mime_type == "application/vnd.google-apps.folder" and not allow_move_folders:
+        reasons.append("file is a folder and moving folders is disabled")
+    if mime_type == "application/vnd.google-apps.shortcut" and not allow_move_shortcuts:
+        reasons.append("shortcut moves disabled")
+
+    owned_by_me = str(meta.get("ownedByMe", row.get("owned_by_me", ""))).strip().lower() == "true"
+    can_move_within_drive = _capability_value(meta, "capabilities_can_move_item_within_drive") or str((meta.get("capabilities") or {}).get("canMoveItemWithinDrive", "")).strip()
+    can_move_out_of_drive = _capability_value(meta, "capabilities_can_move_item_out_of_drive") or str((meta.get("capabilities") or {}).get("canMoveItemOutOfDrive", "")).strip()
+    can_add_parent = _capability_value(meta, "capabilities_can_add_my_drive_parent") or str((meta.get("capabilities") or {}).get("canAddMyDriveParent", "")).strip()
+    can_remove_parent = _capability_value(meta, "capabilities_can_remove_my_drive_parent") or str((meta.get("capabilities") or {}).get("canRemoveMyDriveParent", "")).strip()
+    capability_fields_present = any(
+        _capability_value(meta, key) for key in [
+            "capabilities_can_move_item_within_drive",
+            "capabilities_can_move_item_out_of_drive",
+            "capabilities_can_add_my_drive_parent",
+            "capabilities_can_remove_my_drive_parent",
+        ]
+    ) or bool(meta.get("capabilities"))
+    if owned_only and not owned_by_me:
+        reasons.append("owned-only")
+    elif not owned_by_me:
+        if shared_file_strategy == "skip":
+            reasons.append("file not owned by authenticated user")
+        elif shared_file_strategy == "allow-capable":
+            if not (str(can_move_within_drive).lower() == "true" and str(can_add_parent).lower() == "true" and str(can_remove_parent).lower() == "true"):
+                if capability_fields_present:
+                    if str(can_move_within_drive).lower() != "true":
+                        reasons.append("missing capability: canMoveItemWithinDrive")
+                    if str(can_add_parent).lower() != "true":
+                        reasons.append("missing capability: canAddMyDriveParent")
+                    if str(can_remove_parent).lower() != "true":
+                        reasons.append("missing capability: canRemoveMyDriveParent")
+                else:
+                    reasons.append("move capability not available")
+        else:
+            reasons.append("file not owned by authenticated user")
+    else:
+        if str(can_move_within_drive).lower() != "true":
+            reasons.append("move capability not available")
+        elif str(can_remove_parent).lower() != "true":
+            reasons.append("cannot remove existing parent")
+
+    deduped = []
+    for reason in reasons:
+        if reason not in deduped:
+            deduped.append(reason)
+    return len(deduped) == 0, deduped
 
 
 def log_inventory_action(log_path: Path, action: str, status: str, message: str):
@@ -92,7 +207,21 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
     results = []
     evaluated_count = 0
 
-    def record_skip(*, file_id: str, name: str, current_path: str, original_parents: str, destination_path: str, reason: str):
+    def record_skip(
+        *,
+        file_id: str,
+        name: str,
+        current_path: str,
+        review_decision: str,
+        owned_by_me: str,
+        capabilities_can_move_item_within_drive: str,
+        capabilities_can_add_my_drive_parent: str,
+        capabilities_can_remove_my_drive_parent: str,
+        original_parents: str,
+        destination_path: str,
+        destination_folder_id: str = "",
+        reason: str,
+    ):
         _write_move_plan_row(
             plan_path,
             mode="DRY_RUN" if dry_run else "LIVE",
@@ -101,9 +230,14 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
             file_id=file_id,
             name=name,
             current_path=current_path,
+            review_decision=review_decision,
+            owned_by_me=owned_by_me,
+            capabilities_can_move_item_within_drive=capabilities_can_move_item_within_drive,
+            capabilities_can_add_my_drive_parent=capabilities_can_add_my_drive_parent,
+            capabilities_can_remove_my_drive_parent=capabilities_can_remove_my_drive_parent,
             original_parents=original_parents,
             destination_path=destination_path,
-            destination_folder_id="",
+            destination_folder_id=destination_folder_id,
         )
         print(
             f"SKIPPED: {name} | current_path={current_path} | "
@@ -116,6 +250,7 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
         file_id = row.get("file_id", "")
         name = row.get("name", "")
         current_path = row.get("current_path", "")
+        review_decision = row.get("review_decision", "")
         original_parents = row.get("parents", "")
         destination = row.get("final_destination") or ""
         if row.get("review_decision", "") != "APPROVE_MOVE":
@@ -123,6 +258,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                 file_id=file_id,
                 name=name,
                 current_path=current_path,
+                review_decision=review_decision,
+                owned_by_me=row.get("owned_by_me", ""),
+                capabilities_can_move_item_within_drive=row.get("capabilities_can_move_item_within_drive", ""),
+                capabilities_can_add_my_drive_parent=row.get("capabilities_can_add_my_drive_parent", ""),
+                capabilities_can_remove_my_drive_parent=row.get("capabilities_can_remove_my_drive_parent", ""),
                 original_parents=original_parents,
                 destination_path=destination,
                 reason="review_decision is not APPROVE_MOVE",
@@ -133,6 +273,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                 file_id="",
                 name=name,
                 current_path=current_path,
+                review_decision=review_decision,
+                owned_by_me=row.get("owned_by_me", ""),
+                capabilities_can_move_item_within_drive=row.get("capabilities_can_move_item_within_drive", ""),
+                capabilities_can_add_my_drive_parent=row.get("capabilities_can_add_my_drive_parent", ""),
+                capabilities_can_remove_my_drive_parent=row.get("capabilities_can_remove_my_drive_parent", ""),
                 original_parents=original_parents,
                 destination_path=destination,
                 reason="missing file_id",
@@ -143,6 +288,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                 file_id=file_id,
                 name=name,
                 current_path=current_path,
+                review_decision=review_decision,
+                owned_by_me=row.get("owned_by_me", ""),
+                capabilities_can_move_item_within_drive=row.get("capabilities_can_move_item_within_drive", ""),
+                capabilities_can_add_my_drive_parent=row.get("capabilities_can_add_my_drive_parent", ""),
+                capabilities_can_remove_my_drive_parent=row.get("capabilities_can_remove_my_drive_parent", ""),
                 original_parents=original_parents,
                 destination_path="",
                 reason="final destination is blank",
@@ -153,6 +303,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                 file_id=file_id,
                 name=name,
                 current_path=current_path,
+                review_decision=review_decision,
+                owned_by_me=row.get("owned_by_me", ""),
+                capabilities_can_move_item_within_drive=row.get("capabilities_can_move_item_within_drive", ""),
+                capabilities_can_add_my_drive_parent=row.get("capabilities_can_add_my_drive_parent", ""),
+                capabilities_can_remove_my_drive_parent=row.get("capabilities_can_remove_my_drive_parent", ""),
                 original_parents=original_parents,
                 destination_path="",
                 reason="final destination is blank",
@@ -166,88 +321,57 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
             parents = meta.get("parents", []) or []
             capabilities = meta.get("capabilities") or {}
             shortcut_details = meta.get("shortcutDetails") or {}
-            if not parents:
-                record_skip(
-                    file_id=file_id,
-                    name=meta.get("name", name),
-                    current_path=current_path,
-                    original_parents="",
-                    destination_path=destination,
-                    reason="file has no parents",
-                )
-                continue
-            if len(parents) > 1:
-                record_skip(
-                    file_id=file_id,
-                    name=meta.get("name", name),
-                    current_path=current_path,
-                    original_parents=",".join(parents),
-                    destination_path=destination,
-                    reason="file has multiple parents",
-                )
-                continue
-            if meta.get("mimeType") == "application/vnd.google-apps.folder" and not allow_move_folders:
-                record_skip(
-                    file_id=file_id,
-                    name=meta.get("name", name),
-                    current_path=current_path,
-                    original_parents=",".join(parents),
-                    destination_path=destination,
-                    reason="file is a folder and moving folders is disabled",
-                )
-                continue
-            if meta.get("mimeType") == "application/vnd.google-apps.shortcut":
-                if not allow_move_shortcuts:
-                    record_skip(
-                        file_id=file_id,
-                        name=meta.get("name", name),
-                        current_path=current_path,
-                        original_parents=",".join(parents),
-                        destination_path=destination,
-                        reason="shortcut moves disabled",
-                    )
-                    continue
-                print(f"SHORTCUT: {meta.get('name', name)} | current_path={current_path} | destination={destination} | file_id={file_id}")
-            if meta.get("ownedByMe") is False:
-                if not (capabilities.get("canMoveItemWithinDrive") or capabilities.get("canMoveItemOutOfDrive")):
-                    record_skip(
-                        file_id=file_id,
-                        name=meta.get("name", name),
-                        current_path=current_path,
-                        original_parents=",".join(parents),
-                        destination_path=destination,
-                        reason="file not owned by authenticated user",
-                    )
-                    continue
             dest_id = ensure_folder_path(drive_service, destination, allow_create_missing_destination_folders)
+            eligible, eligibility_reasons = evaluate_move_eligibility(
+                {
+                    **row,
+                    "file_id": file_id,
+                    "review_decision": row.get("review_decision", ""),
+                    "owned_by_me": str(meta.get("ownedByMe", row.get("owned_by_me", ""))),
+                    "capabilities_can_move_item_within_drive": str(capabilities.get("canMoveItemWithinDrive", row.get("capabilities_can_move_item_within_drive", ""))),
+                    "capabilities_can_move_item_out_of_drive": str(capabilities.get("canMoveItemOutOfDrive", row.get("capabilities_can_move_item_out_of_drive", ""))),
+                    "capabilities_can_add_my_drive_parent": str(capabilities.get("canAddMyDriveParent", row.get("capabilities_can_add_my_drive_parent", ""))),
+                    "capabilities_can_remove_my_drive_parent": str(capabilities.get("canRemoveMyDriveParent", row.get("capabilities_can_remove_my_drive_parent", ""))),
+                    "mime_type": meta.get("mimeType", row.get("mime_type", "")),
+                },
+                destination_path=destination,
+                destination_folder_id=dest_id or "",
+                original_parents=parents,
+                allow_move_folders=allow_move_folders,
+                allow_move_shortcuts=allow_move_shortcuts,
+                shared_file_strategy="skip",
+                owned_only=False,
+                current_metadata=meta,
+            )
             if not dest_id:
                 record_skip(
                     file_id=file_id,
                     name=meta.get("name", name),
                     current_path=current_path,
+                    review_decision=review_decision,
+                    owned_by_me=str(meta.get("ownedByMe", row.get("owned_by_me", ""))),
+                    capabilities_can_move_item_within_drive=str(capabilities.get("canMoveItemWithinDrive", row.get("capabilities_can_move_item_within_drive", ""))),
+                    capabilities_can_add_my_drive_parent=str(capabilities.get("canAddMyDriveParent", row.get("capabilities_can_add_my_drive_parent", ""))),
+                    capabilities_can_remove_my_drive_parent=str(capabilities.get("canRemoveMyDriveParent", row.get("capabilities_can_remove_my_drive_parent", ""))),
                     original_parents=",".join(parents),
                     destination_path=destination,
-                    reason="destination could not be resolved",
+                    reason="destination folder could not be resolved",
                 )
                 continue
-            if not capabilities.get("canAddMyDriveParent", True):
+            if not eligible:
                 record_skip(
                     file_id=file_id,
                     name=meta.get("name", name),
                     current_path=current_path,
+                    review_decision=review_decision,
+                    owned_by_me=str(meta.get("ownedByMe", row.get("owned_by_me", ""))),
+                    capabilities_can_move_item_within_drive=str(capabilities.get("canMoveItemWithinDrive", row.get("capabilities_can_move_item_within_drive", ""))),
+                    capabilities_can_add_my_drive_parent=str(capabilities.get("canAddMyDriveParent", row.get("capabilities_can_add_my_drive_parent", ""))),
+                    capabilities_can_remove_my_drive_parent=str(capabilities.get("canRemoveMyDriveParent", row.get("capabilities_can_remove_my_drive_parent", ""))),
                     original_parents=",".join(parents),
                     destination_path=destination,
-                    reason="cannot add destination parent",
-                )
-                continue
-            if not capabilities.get("canRemoveMyDriveParent", True):
-                record_skip(
-                    file_id=file_id,
-                    name=meta.get("name", name),
-                    current_path=current_path,
-                    original_parents=",".join(parents),
-                    destination_path=destination,
-                    reason="cannot remove existing parent",
+                    destination_folder_id=dest_id,
+                    reason="; ".join(eligibility_reasons),
                 )
                 continue
             if dry_run:
@@ -259,6 +383,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                     file_id=file_id,
                     name=meta.get("name", row.get("name", "")),
                     current_path=row.get("current_path", ""),
+                    review_decision=review_decision,
+                    owned_by_me=str(meta.get("ownedByMe", row.get("owned_by_me", ""))),
+                    capabilities_can_move_item_within_drive=str(capabilities.get("canMoveItemWithinDrive", row.get("capabilities_can_move_item_within_drive", ""))),
+                    capabilities_can_add_my_drive_parent=str(capabilities.get("canAddMyDriveParent", row.get("capabilities_can_add_my_drive_parent", ""))),
+                    capabilities_can_remove_my_drive_parent=str(capabilities.get("canRemoveMyDriveParent", row.get("capabilities_can_remove_my_drive_parent", ""))),
                     original_parents=",".join(parents),
                     destination_path=destination,
                     destination_folder_id=dest_id,
@@ -281,6 +410,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                 file_id=file_id,
                 name=meta.get("name", row.get("name", "")),
                 current_path=current_path,
+                review_decision=review_decision,
+                owned_by_me=str(meta.get("ownedByMe", row.get("owned_by_me", ""))),
+                capabilities_can_move_item_within_drive=str(capabilities.get("canMoveItemWithinDrive", row.get("capabilities_can_move_item_within_drive", ""))),
+                capabilities_can_add_my_drive_parent=str(capabilities.get("canAddMyDriveParent", row.get("capabilities_can_add_my_drive_parent", ""))),
+                capabilities_can_remove_my_drive_parent=str(capabilities.get("canRemoveMyDriveParent", row.get("capabilities_can_remove_my_drive_parent", ""))),
                 original_parents=previous_parents,
                 destination_path=destination,
                 destination_folder_id=dest_id,
@@ -301,6 +435,11 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
                 file_id=file_id,
                 name=name,
                 current_path=current_path,
+                review_decision=review_decision,
+                owned_by_me=row.get("owned_by_me", ""),
+                capabilities_can_move_item_within_drive=row.get("capabilities_can_move_item_within_drive", ""),
+                capabilities_can_add_my_drive_parent=row.get("capabilities_can_add_my_drive_parent", ""),
+                capabilities_can_remove_my_drive_parent=row.get("capabilities_can_remove_my_drive_parent", ""),
                 original_parents=original_parents,
                 destination_path=destination,
                 destination_folder_id="",

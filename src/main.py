@@ -10,7 +10,7 @@ from .auto_approve import auto_approve_safe, bulk_prepare_safe, fill_destination
 from .config import load_config
 from .drive_inventory import inventory_files
 from .folder_setup import FOLDER_PATHS, ensure_folder_path
-from .move_approved import log_inventory_action, move_approved_rows
+from .move_approved import evaluate_move_eligibility, log_inventory_action, move_approved_rows
 from .sheets_review import create_review_spreadsheet
 from .summary import find_latest_inventory_csv, format_summary, load_inventory_rows, summarize_rows, write_summary_export
 
@@ -186,6 +186,7 @@ def cmd_fill_destinations(args):
 def cmd_bulk_prepare_safe(args):
     config = load_config()
     creds = get_credentials()
+    drive = get_drive_service(creds)
     sheets = get_sheets_service(creds)
     result = bulk_prepare_safe(
         sheets,
@@ -197,6 +198,7 @@ def cmd_bulk_prepare_safe(args):
         limit=args.limit,
         shared_file_strategy=args.shared_file_strategy,
         owned_only=args.owned_only,
+        drive_service=drive,
     )
     print("Bulk prepare summary:")
     print(f"  total rows evaluated: {result['total_rows']}")
@@ -226,6 +228,109 @@ def cmd_bulk_prepare_safe(args):
     print(f"  plan CSV: {result['plan_path']}")
 
 
+def cmd_diagnose_approved(args):
+    config = load_config()
+    creds = get_credentials()
+    drive = get_drive_service(creds)
+    sheets = get_sheets_service(creds)
+    from .sheets_review import read_review_rows
+
+    rows = read_review_rows(sheets, args.spreadsheet_id)
+    approved = [row for row in rows if row.get("review_decision", "").strip() == "APPROVE_MOVE"]
+    total_rows = len(rows)
+    by_destination = {}
+    by_owned = {"True": 0, "False": 0, "": 0}
+    by_capabilities = {"all_true": 0, "missing_or_false": 0}
+    predicted_ok = 0
+    skip_reasons = {}
+    samples = []
+    for row in approved:
+        destination = row.get("final_destination", "").strip()
+        dest_id = ensure_folder_path(drive, destination, False) if destination else ""
+        parents = [p for p in row.get("parents", "").split(",") if p]
+        eligible, reasons = evaluate_move_eligibility(
+            row,
+            destination_path=destination,
+            destination_folder_id=dest_id or "",
+            original_parents=parents,
+            allow_move_folders=config.allow_move_folders,
+            allow_move_shortcuts=config.allow_move_shortcuts,
+            shared_file_strategy="allow-capable" if not row.get("owned_by_me", "").strip() == "True" else "skip",
+            owned_only=False,
+            current_metadata={
+                "ownedByMe": row.get("owned_by_me", ""),
+                "capabilities": {
+                    "canMoveItemWithinDrive": row.get("capabilities_can_move_item_within_drive", ""),
+                    "canMoveItemOutOfDrive": row.get("capabilities_can_move_item_out_of_drive", ""),
+                    "canAddMyDriveParent": row.get("capabilities_can_add_my_drive_parent", ""),
+                    "canRemoveMyDriveParent": row.get("capabilities_can_remove_my_drive_parent", ""),
+                },
+                "mimeType": row.get("mime_type", ""),
+            },
+        )
+        by_destination[destination] = by_destination.get(destination, 0) + 1
+        owned_key = row.get("owned_by_me", "")
+        by_owned[owned_key] = by_owned.get(owned_key, 0) + 1
+        if all(
+            str(row.get(col, "")).strip().lower() == "true"
+            for col in [
+                "capabilities_can_move_item_within_drive",
+                "capabilities_can_add_my_drive_parent",
+                "capabilities_can_remove_my_drive_parent",
+            ]
+        ):
+            by_capabilities["all_true"] += 1
+        else:
+            by_capabilities["missing_or_false"] += 1
+        if eligible:
+            predicted_ok += 1
+        else:
+            for reason in reasons:
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+        if len(samples) < 10:
+            samples.append(
+                {
+                    "file_id": row.get("file_id", ""),
+                    "name": row.get("name", ""),
+                    "destination": destination,
+                    "destination_folder_id": dest_id or "",
+                    "owned_by_me": row.get("owned_by_me", ""),
+                    "capabilities": "/".join(
+                        [
+                            row.get("capabilities_can_move_item_within_drive", ""),
+                            row.get("capabilities_can_add_my_drive_parent", ""),
+                            row.get("capabilities_can_remove_my_drive_parent", ""),
+                        ]
+                    ),
+                    "predicted": "would move" if eligible else "skipped",
+                    "reason": "; ".join(reasons),
+                }
+            )
+    print("Diagnose approved summary:")
+    print(f"  total rows: {total_rows}")
+    print(f"  rows with review_decision APPROVE_MOVE: {len(approved)}")
+    print("  approved rows by destination:")
+    for destination, count in sorted(by_destination.items(), key=lambda item: (-item[1], item[0])):
+        print(f"    {destination}: {count}")
+    print("  approved rows by owned_by_me:")
+    for key, count in by_owned.items():
+        print(f"    {key}: {count}")
+    print("  approved rows by move capabilities:")
+    for key, count in by_capabilities.items():
+        print(f"    {key}: {count}")
+    print(f"  approved rows by predicted move eligibility: {predicted_ok}")
+    print("  top predicted skip reasons:")
+    for reason, count in sorted(skip_reasons.items(), key=lambda item: (-item[1], item[0]))[:10]:
+        print(f"    {reason}: {count}")
+    print("  first 10 approved rows:")
+    for sample in samples:
+        print(
+            f"    {sample['file_id']} | {sample['name']} | destination={sample['destination']} | "
+            f"destination_folder_id={sample['destination_folder_id']} | owned_by_me={sample['owned_by_me']} | "
+            f"capabilities={sample['capabilities']} | predicted={sample['predicted']}"
+        )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="google-drive-organizer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -238,6 +343,8 @@ def build_parser():
     move = sub.add_parser("move-approved")
     move.add_argument("--spreadsheet-id", required=True)
     move.add_argument("--dry-run", action="store_true")
+    diagnose = sub.add_parser("diagnose-approved")
+    diagnose.add_argument("--spreadsheet-id", required=True)
     auto = sub.add_parser("auto-approve-safe")
     auto.add_argument("--spreadsheet-id", required=True)
     auto.add_argument("--dry-run", action="store_true")
@@ -267,6 +374,8 @@ def main():
         cmd_summarize(args)
     elif args.command == "move-approved":
         cmd_move_approved(args)
+    elif args.command == "diagnose-approved":
+        cmd_diagnose_approved(args)
     elif args.command == "auto-approve-safe":
         cmd_auto_approve_safe(args)
     elif args.command == "fill-destinations":

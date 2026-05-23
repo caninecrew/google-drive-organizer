@@ -7,6 +7,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from .move_approved import evaluate_move_eligibility
+
 
 AUTO_APPROVAL_PLAN_HEADER = [
     "file_id",
@@ -462,6 +464,7 @@ def bulk_prepare_safe(
     limit: int | None = None,
     shared_file_strategy: str = "skip",
     owned_only: bool = False,
+    drive_service=None,
 ):
     headers, rows = _read_sheet_rows(sheets_service, spreadsheet_id)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
@@ -520,6 +523,46 @@ def bulk_prepare_safe(
             owned_only,
             shared_file_strategy,
         )
+        destination_folder_id = ""
+        destination_eligible = False
+        destination_reasons: list[str] = []
+        if planned_final and drive_service is not None:
+            try:
+                from .folder_setup import ensure_folder_path
+
+                destination_folder_id = ensure_folder_path(drive_service, planned_final, False)
+            except Exception:
+                destination_folder_id = ""
+            destination_eligible, destination_reasons = evaluate_move_eligibility(
+                {
+                    **row,
+                    "file_id": row.get("file_id", ""),
+                    "review_decision": "APPROVE_MOVE" if safe else "NEEDS_REVIEW",
+                },
+                destination_path=planned_final,
+                destination_folder_id=destination_folder_id or "",
+                original_parents=(row.get("parents", "") or "").split(",") if row.get("parents", "") else [],
+                allow_move_folders=False,
+                allow_move_shortcuts=False,
+                shared_file_strategy=shared_file_strategy,
+                owned_only=owned_only,
+                current_metadata={
+                    "ownedByMe": row.get("owned_by_me", ""),
+                    "capabilities": {
+                        "canMoveItemWithinDrive": row.get("capabilities_can_move_item_within_drive", ""),
+                        "canMoveItemOutOfDrive": row.get("capabilities_can_move_item_out_of_drive", ""),
+                        "canAddMyDriveParent": row.get("capabilities_can_add_my_drive_parent", ""),
+                        "canRemoveMyDriveParent": row.get("capabilities_can_remove_my_drive_parent", ""),
+                    },
+                    "mimeType": row.get("mime_type", ""),
+                },
+            )
+            if not destination_eligible:
+                if "destination folder could not be resolved" not in destination_reasons:
+                    approval_reasons = destination_reasons + approval_reasons
+                else:
+                    approval_reasons = destination_reasons
+                safe = False
         reason_parts = [destination_reason] if destination_reason else []
         if safe and (limit is None or approved_seen < limit):
             planned_review = "APPROVE_MOVE"
