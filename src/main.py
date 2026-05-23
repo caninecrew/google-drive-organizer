@@ -235,18 +235,38 @@ def cmd_diagnose_approved(args):
     sheets = get_sheets_service(creds)
     from .sheets_review import read_review_rows
 
+    print("Reading approved rows...")
     rows = read_review_rows(sheets, args.spreadsheet_id)
     approved = [row for row in rows if row.get("review_decision", "").strip() == "APPROVE_MOVE"]
     total_rows = len(rows)
+    unique_destinations = sorted({row.get("final_destination", "").strip() for row in approved if row.get("final_destination", "").strip()})
+    print(f"Resolving {len(unique_destinations)} unique destinations...")
+    destination_cache: dict[str, str] = {}
+    unresolved_destinations: set[str] = set()
+    for destination in unique_destinations:
+        try:
+            destination_cache[destination] = ensure_folder_path(drive, destination, False) or ""
+        except Exception:
+            destination_cache[destination] = ""
+        if not destination_cache[destination]:
+            unresolved_destinations.add(destination)
+    print("Evaluating approved rows...")
     by_destination = {}
     by_owned = {"True": 0, "False": 0, "": 0}
     by_capabilities = {"all_true": 0, "missing_or_false": 0}
     predicted_ok = 0
+    predicted_skipped = 0
+    resolved_destination_count = 0
+    unresolved_destination_count = 0
     skip_reasons = {}
     samples = []
     for row in approved:
         destination = row.get("final_destination", "").strip()
-        dest_id = ensure_folder_path(drive, destination, False) if destination else ""
+        dest_id = destination_cache.get(destination, "") if destination else ""
+        if dest_id:
+            resolved_destination_count += 1
+        else:
+            unresolved_destination_count += 1
         parents = [p for p in row.get("parents", "").split(",") if p]
         eligible, reasons = evaluate_move_eligibility(
             row,
@@ -285,6 +305,7 @@ def cmd_diagnose_approved(args):
         if eligible:
             predicted_ok += 1
         else:
+            predicted_skipped += 1
             for reason in reasons:
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
         if len(samples) < 10:
@@ -309,6 +330,10 @@ def cmd_diagnose_approved(args):
     print("Diagnose approved summary:")
     print(f"  total rows: {total_rows}")
     print(f"  rows with review_decision APPROVE_MOVE: {len(approved)}")
+    print(f"  approved rows with resolved destination: {resolved_destination_count}")
+    print(f"  approved rows with unresolved destination: {unresolved_destination_count}")
+    print(f"  approved rows predicted movable: {predicted_ok}")
+    print(f"  approved rows predicted skipped: {predicted_skipped}")
     print("  approved rows by destination:")
     for destination, count in sorted(by_destination.items(), key=lambda item: (-item[1], item[0])):
         print(f"    {destination}: {count}")
@@ -327,7 +352,7 @@ def cmd_diagnose_approved(args):
         print(
             f"    {sample['file_id']} | {sample['name']} | destination={sample['destination']} | "
             f"destination_folder_id={sample['destination_folder_id']} | owned_by_me={sample['owned_by_me']} | "
-            f"capabilities={sample['capabilities']} | predicted={sample['predicted']}"
+            f"capabilities={sample['capabilities']} | predicted={sample['predicted']} | reason={sample['reason']}"
         )
 
 

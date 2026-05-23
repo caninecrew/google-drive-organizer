@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
+from types import SimpleNamespace
 from pathlib import Path
 
 from src.auto_approve import _retryable_request, auto_approve_safe, bulk_prepare_safe, fill_destinations
@@ -11,6 +12,7 @@ from src.drive_inventory import inventory_files
 from src.drive_inventory import _resolve_path
 from src.move_approved import move_approved_rows
 from src.move_approved import evaluate_move_eligibility
+import src.main as main_mod
 from src.summary import build_warnings, find_latest_inventory_csv, format_summary, summarize_rows
 from src.sheets_review import FINAL_DESTINATION_OPTIONS, REVIEW_DECISION_OPTIONS, _make_validation_request
 
@@ -873,6 +875,114 @@ def test_diagnose_eligibility_allows_owned_file_without_add_parent_requirement()
     )
     assert eligible is True
     assert reasons == []
+
+
+def test_diagnose_approved_resolves_each_destination_once(monkeypatch, capsys):
+    class Config:
+        allow_move_folders = False
+        allow_move_shortcuts = False
+        log_dir = "data/logs"
+
+    rows = [
+        {
+            "file_id": "file-1",
+            "name": "A",
+            "current_path": "My Drive/A",
+            "review_decision": "APPROVE_MOVE",
+            "final_destination": "01 Personal",
+            "owned_by_me": "True",
+            "capabilities_can_move_item_within_drive": "True",
+            "capabilities_can_add_my_drive_parent": "True",
+            "capabilities_can_remove_my_drive_parent": "True",
+            "parents": "parent-1",
+            "mime_type": "text/plain",
+        },
+        {
+            "file_id": "file-2",
+            "name": "B",
+            "current_path": "My Drive/B",
+            "review_decision": "APPROVE_MOVE",
+            "final_destination": "01 Personal",
+            "owned_by_me": "True",
+            "capabilities_can_move_item_within_drive": "True",
+            "capabilities_can_add_my_drive_parent": "True",
+            "capabilities_can_remove_my_drive_parent": "True",
+            "parents": "parent-2",
+            "mime_type": "text/plain",
+        },
+        {
+            "file_id": "file-3",
+            "name": "C",
+            "current_path": "My Drive/C",
+            "review_decision": "APPROVE_MOVE",
+            "final_destination": "02 School and Education",
+            "owned_by_me": "True",
+            "capabilities_can_move_item_within_drive": "True",
+            "capabilities_can_add_my_drive_parent": "True",
+            "capabilities_can_remove_my_drive_parent": "True",
+            "parents": "parent-3",
+            "mime_type": "text/plain",
+        },
+    ]
+    sheets = FakeSheetsService(rows=rows)
+    drive = FakeDriveService(
+        files={
+            "dest-1": {"id": "dest-1", "name": "01 Personal", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+            "dest-2": {"id": "dest-2", "name": "02 School and Education", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+        }
+    )
+    calls = []
+
+    def fake_ensure_folder_path(service, path, allow_create):
+        calls.append((path, allow_create))
+        return {"01 Personal": "dest-1", "02 School and Education": "dest-2"}.get(path, "")
+
+    monkeypatch.setattr(main_mod, "load_config", lambda: Config())
+    monkeypatch.setattr(main_mod, "get_credentials", lambda: object())
+    monkeypatch.setattr(main_mod, "get_drive_service", lambda creds: drive)
+    monkeypatch.setattr(main_mod, "get_sheets_service", lambda creds: sheets)
+    monkeypatch.setattr(main_mod, "ensure_folder_path", fake_ensure_folder_path)
+    main_mod.cmd_diagnose_approved(SimpleNamespace(spreadsheet_id="sheet-1"))
+    captured = capsys.readouterr().out
+    assert "Resolving 2 unique destinations..." in captured
+    assert "Reading approved rows..." in captured
+    assert "Evaluating approved rows..." in captured
+    assert len(calls) == 2
+    assert calls == [("01 Personal", False), ("02 School and Education", False)]
+
+
+def test_diagnose_approved_reports_unresolved_destinations(monkeypatch, capsys):
+    class Config:
+        allow_move_folders = False
+        allow_move_shortcuts = False
+        log_dir = "data/logs"
+
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "A",
+                "current_path": "My Drive/A",
+                "review_decision": "APPROVE_MOVE",
+                "final_destination": "Missing Destination",
+                "owned_by_me": "True",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+                "parents": "parent-1",
+                "mime_type": "text/plain",
+            }
+        ]
+    )
+    drive = FakeDriveService(files={})
+    monkeypatch.setattr(main_mod, "load_config", lambda: Config())
+    monkeypatch.setattr(main_mod, "get_credentials", lambda: object())
+    monkeypatch.setattr(main_mod, "get_drive_service", lambda creds: drive)
+    monkeypatch.setattr(main_mod, "get_sheets_service", lambda creds: sheets)
+    monkeypatch.setattr(main_mod, "ensure_folder_path", lambda service, path, allow_create: "")
+    main_mod.cmd_diagnose_approved(SimpleNamespace(spreadsheet_id="sheet-1"))
+    captured = capsys.readouterr().out
+    assert "approved rows with unresolved destination: 1" in captured
 
 
 def test_drive_activity_missing_fields_returns_unknown():
