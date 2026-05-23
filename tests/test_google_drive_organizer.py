@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
+from src.drive_inventory import _resolve_path
 from src.move_approved import move_approved_rows
 
 
@@ -54,6 +55,62 @@ def test_no_file_marked_for_deletion_automatically():
     assert "Delete" not in destination
     assert role in {"Archive", "Review Later"}
     assert confidence == "Low"
+
+
+def test_path_based_classification_overrides_goofy_filename():
+    role, sensitivity, destination, confidence = classify_file(
+        "goofy_file.txt",
+        "text/plain",
+        current_path="My Drive/FOIA/Public Records/requests/goofy_file.txt",
+    )
+    assert role == "FOIA and Public Records"
+    assert destination == "06 FOIA and Public Records"
+    assert confidence == "Medium"
+
+
+def test_untitled_file_with_no_useful_path_goes_to_review_later():
+    role, sensitivity, destination, confidence = classify_file("Untitled", "text/plain", current_path="My Drive/Random/Untitled")
+    assert role == "Review Later"
+    assert destination == "99 Review Later"
+    assert confidence == "Low"
+
+
+def test_untitled_school_path_stays_school():
+    role, sensitivity, destination, confidence = classify_file(
+        "Untitled",
+        "text/plain",
+        current_path="My Drive/Tennessee Tech/DS 4250/Untitled",
+    )
+    assert role == "School and Education"
+    assert destination == "02 School and Education"
+    assert confidence == "Medium"
+
+
+def test_minecraft_in_old_childhood_path_goes_to_archive_games():
+    role, sensitivity, destination, confidence = classify_file(
+        "minecraft save 1.zip",
+        "application/zip",
+        current_path="My Drive/Archive/Childhood Files/Old Games/minecraft save 1.zip",
+    )
+    assert role == "Archive"
+    assert destination == "09 Archive/Old Games and Creative Projects"
+    assert confidence == "High"
+
+
+def test_path_builder_handles_missing_parent_safely():
+    current_path, note = _resolve_path({"name": "notes.docx", "parents": ["missing-parent"]}, folder_cache={})
+    assert current_path == "Unknown Parent/notes.docx"
+    assert note
+
+
+def test_path_builder_resolves_readable_path_order():
+    folder_cache = {
+        "folder-1": {"name": "DS 4250", "parent": "folder-2"},
+        "folder-2": {"name": "Tennessee Tech", "parent": "root"},
+    }
+    current_path, note = _resolve_path({"name": "notes.docx", "parents": ["folder-1"]}, folder_cache=folder_cache)
+    assert current_path == "My Drive/Tennessee Tech/DS 4250/notes.docx"
+    assert note == ""
 
 
 def test_move_requires_exact_approve_move():

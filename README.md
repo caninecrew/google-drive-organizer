@@ -7,6 +7,7 @@ Safe Google Drive organization assistant for personal use.
 - Inventories non-trashed files from My Drive.
 - Writes review rows to Google Sheets.
 - Suggests categories, destination folders, sensitivity, and activity metadata.
+- Includes a readable `current_path` column so folder context can influence review decisions.
 - Moves only files that you explicitly approve in the review sheet.
 - Never deletes files.
 
@@ -84,6 +85,12 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 4. Set `final_destination` if you want to override the suggested destination.
 5. Run `move-approved` with `--dry-run` first.
 6. Run `move-approved` without `--dry-run` only after confirming the dry run output.
+
+## Why `current_path` matters
+
+- Classification now uses both filename and folder path.
+- A goofy or untitled filename inside a school, FOIA, work, or scouting folder may still be serious.
+- `current_path` helps review old, ambiguous, or inherited files without forcing them into archive buckets too early.
 
 ## First Real Run Checklist
 

@@ -37,6 +37,7 @@ def cmd_inventory(args):
             "owners",
             "size",
             "web_view_link",
+            "current_path",
             "suggested_role",
             "suggested_sensitivity",
             "suggested_destination",

@@ -14,6 +14,7 @@ HEADER_ROW = [
     "owners",
     "size",
     "web_view_link",
+    "current_path",
     "suggested_role",
     "suggested_sensitivity",
     "suggested_destination",
@@ -54,8 +55,8 @@ def _apply_destination_validation(sheets_service, spreadsheet_id: str):
                             "sheetId": sheet_id,
                             "startRowIndex": 1,
                             "endRowIndex": 10000,
-                            "startColumnIndex": 16,
-                            "endColumnIndex": 17,
+                            "startColumnIndex": 17,
+                            "endColumnIndex": 18,
                         },
                         "rule": {
                             "condition": {

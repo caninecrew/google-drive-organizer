@@ -18,6 +18,7 @@ class InventoryRow:
     owners: str
     size: str
     web_view_link: str
+    current_path: str
     suggested_role: str
     suggested_sensitivity: str
     suggested_destination: str
@@ -38,17 +39,78 @@ def _safe_join(items) -> str:
     return str(items)
 
 
+def _build_folder_cache(drive_service) -> dict[str, dict[str, str]]:
+    cache: dict[str, dict[str, str]] = {}
+    page_token = None
+    fields = "nextPageToken, files(id, name, parents, mimeType)"
+    while True:
+        try:
+            response = drive_service.files().list(
+                q="trashed = false and mimeType = 'application/vnd.google-apps.folder'",
+                spaces="drive",
+                pageSize=1000,
+                fields=fields,
+                pageToken=page_token,
+            ).execute()
+        except Exception:
+            return cache
+        for folder in response.get("files", []):
+            cache[folder["id"]] = {
+                "name": folder.get("name", ""),
+                "parent": (folder.get("parents") or [None])[0],
+            }
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return cache
+
+
+def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]]) -> tuple[str, str]:
+    name = file_metadata.get("name", "")
+    parents = file_metadata.get("parents") or []
+    if not parents:
+        return f"My Drive/{name}", "no parents"
+    if len(parents) > 1:
+        parent_id = parents[0]
+        base = "multiple parents"
+    else:
+        parent_id = parents[0]
+        base = ""
+    if not parent_id:
+        return f"Unknown Parent/{name}", "missing parent id"
+
+    folder_names: list[str] = []
+    visited = set()
+    while parent_id and parent_id not in visited:
+        visited.add(parent_id)
+        folder = folder_cache.get(parent_id)
+        if not folder:
+            return f"Unknown Parent/{name}", base or "unresolved parent"
+        folder_name = folder.get("name") or "Unknown Parent"
+        folder_names.append(folder_name)
+        parent_id = folder.get("parent")
+        if parent_id == "root":
+            break
+    path = "/".join(["My Drive", *reversed(folder_names), name])
+    return path, base
+
+
 def inventory_files(drive_service, activity_service=None, include_folders: bool = False, activity_enrichment: bool = False):
     rows = []
     page_token = None
     query = "trashed = false"
     fields = "nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime, owners(displayName, emailAddress), webViewLink, size)"
+    folder_cache = _build_folder_cache(drive_service)
     while True:
-        response = drive_service.files().list(q=query, spaces="drive", pageSize=1000, fields=fields, pageToken=page_token, orderBy="modifiedTime desc").execute()
+        try:
+            response = drive_service.files().list(q=query, spaces="drive", pageSize=1000, fields=fields, pageToken=page_token, orderBy="modifiedTime desc").execute()
+        except Exception:
+            break
         for file in response.get("files", []):
             if file["mimeType"] == "application/vnd.google-apps.folder" and not include_folders:
                 continue
-            role, sensitivity, destination, confidence = classify_file(file.get("name", ""), file.get("mimeType", ""))
+            current_path, path_note = _resolve_path(file, folder_cache)
+            role, sensitivity, destination, confidence = classify_file(file.get("name", ""), file.get("mimeType", ""), current_path=current_path)
             activity = {"activity_level": "Unknown", "last_activity_time": "", "last_activity_type": ""}
             if activity_enrichment and activity_service:
                 activity = enrich_activity(activity_service, file["id"])
@@ -63,6 +125,7 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
                     owners=_safe_join([o.get("displayName") or o.get("emailAddress") for o in file.get("owners", [])]),
                     size=str(file.get("size", "")),
                     web_view_link=file.get("webViewLink", ""),
+                    current_path=current_path if not path_note else f"{current_path} [{path_note}]",
                     suggested_role=role,
                     suggested_sensitivity=sensitivity,
                     suggested_destination=destination,
