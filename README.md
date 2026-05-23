@@ -94,6 +94,9 @@ Every `move-approved` run writes a move plan CSV under `data/logs/` with the pro
 - Classification now uses both filename and folder path.
 - A goofy or untitled filename inside a school, FOIA, work, or scouting folder may still be serious.
 - `current_path` helps review old, ambiguous, or inherited files without forcing them into archive buckets too early.
+- `Untitled` usually means manual review unless the folder path gives clear context.
+- `Project` alone does not mean coding, and `Application` alone does not mean career.
+- Low-confidence rows should be reviewed manually before any move is approved.
 
 ## First Real Run Checklist
 

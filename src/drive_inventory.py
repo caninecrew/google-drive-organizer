@@ -65,11 +65,31 @@ def _build_folder_cache(drive_service) -> dict[str, dict[str, str]]:
     return cache
 
 
-def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]]) -> tuple[str, str]:
+def _fetch_folder_metadata(drive_service, folder_cache: dict[str, dict[str, str]], folder_id: str) -> dict[str, str] | None:
+    if folder_id in folder_cache:
+        return folder_cache[folder_id]
+    try:
+        response = drive_service.files().get(
+            fileId=folder_id,
+            fields="id, name, parents, mimeType",
+        ).execute()
+    except Exception:
+        return None
+    if response.get("mimeType") != "application/vnd.google-apps.folder":
+        return None
+    parent = (response.get("parents") or [None])[0]
+    folder_cache[folder_id] = {
+        "name": response.get("name", ""),
+        "parent": parent,
+    }
+    return folder_cache[folder_id]
+
+
+def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]], drive_service=None) -> tuple[str, str]:
     name = file_metadata.get("name", "")
     parents = file_metadata.get("parents") or []
     if not parents:
-        return f"My Drive/{name}", "no parents"
+        return f"Unknown Parent/{name}", "no parents"
     if len(parents) > 1:
         parent_id = parents[0]
         base = "multiple parents"
@@ -84,6 +104,8 @@ def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]]) 
     while parent_id and parent_id not in visited:
         visited.add(parent_id)
         folder = folder_cache.get(parent_id)
+        if not folder and drive_service is not None:
+            folder = _fetch_folder_metadata(drive_service, folder_cache, parent_id)
         if not folder:
             return f"Unknown Parent/{name}", base or "unresolved parent"
         folder_name = folder.get("name") or "Unknown Parent"
@@ -91,6 +113,8 @@ def _resolve_path(file_metadata: dict, folder_cache: dict[str, dict[str, str]]) 
         parent_id = folder.get("parent")
         if parent_id == "root":
             break
+    if not folder_names:
+        return f"Unknown Parent/{name}", base or "unresolved parent"
     path = "/".join(["My Drive", *reversed(folder_names), name])
     return path, base
 
@@ -109,7 +133,7 @@ def inventory_files(drive_service, activity_service=None, include_folders: bool 
         for file in response.get("files", []):
             if file["mimeType"] == "application/vnd.google-apps.folder" and not include_folders:
                 continue
-            current_path, path_note = _resolve_path(file, folder_cache)
+            current_path, path_note = _resolve_path(file, folder_cache, drive_service=drive_service)
             role, sensitivity, destination, confidence = classify_file(file.get("name", ""), file.get("mimeType", ""), current_path=current_path)
             activity = {"activity_level": "Unknown", "last_activity_time": "", "last_activity_type": ""}
             if activity_enrichment and activity_service:

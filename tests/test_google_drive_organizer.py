@@ -59,6 +59,41 @@ def test_no_file_marked_for_deletion_automatically():
     assert confidence == "Low"
 
 
+def test_untitled_document_with_no_useful_path_goes_to_review_later():
+    role, sensitivity, destination, confidence = classify_file("Untitled document", "application/vnd.google-apps.document")
+    assert role == "Review Later"
+    assert destination == "99 Review Later"
+    assert confidence == "Low"
+
+
+def test_untitled_document_inside_foia_path_goes_to_foia():
+    role, sensitivity, destination, confidence = classify_file(
+        "Untitled document",
+        "application/vnd.google-apps.document",
+        current_path="My Drive/FOIA/Public Records/requests/Untitled document",
+    )
+    assert role == "FOIA and Public Records"
+    assert destination == "06 FOIA and Public Records"
+    assert confidence in {"Medium", "Low"}
+
+
+def test_untitled_document_inside_school_path_goes_to_school():
+    role, sensitivity, destination, confidence = classify_file(
+        "Untitled document",
+        "application/vnd.google-apps.document",
+        current_path="My Drive/Tennessee Tech/DS 4250/Untitled document",
+    )
+    assert role == "School and Education"
+    assert destination == "02 School and Education"
+    assert confidence in {"Medium", "Low"}
+
+
+def test_untitled_document_not_automatically_archived():
+    role, sensitivity, destination, confidence = classify_file("Untitled document", "application/vnd.google-apps.document")
+    assert role != "Archive"
+    assert "Archive" not in destination or destination == "99 Review Later"
+
+
 def test_path_based_classification_overrides_goofy_filename():
     role, sensitivity, destination, confidence = classify_file(
         "goofy_file.txt",
@@ -68,6 +103,60 @@ def test_path_based_classification_overrides_goofy_filename():
     assert role == "FOIA and Public Records"
     assert destination == "06 FOIA and Public Records"
     assert confidence == "Medium"
+
+
+def test_resume_goes_to_work():
+    role, sensitivity, destination, confidence = classify_file("Resume 2026.pdf", "application/pdf")
+    assert role == "Work and Career"
+    assert destination == "03 Work and Career"
+    assert confidence == "High"
+
+
+def test_gideons_onboarding_goes_to_work():
+    role, sensitivity, destination, confidence = classify_file("Gideons onboarding checklist.pdf", "application/pdf")
+    assert role == "Work and Career"
+    assert destination == "03 Work and Career"
+
+
+def test_scouting_application_not_career_when_context_supports_scouting():
+    role, sensitivity, destination, confidence = classify_file(
+        "MTC QD Officer Application",
+        "application/pdf",
+        current_path="My Drive/Scouting/Order of the Arrow/MTC QD Officer Application",
+    )
+    assert role == "Scouting"
+    assert destination == "04 Scouting"
+
+
+def test_sale_does_not_become_work():
+    role, sensitivity, destination, confidence = classify_file("30% Off Sale", "text/plain")
+    assert role in {"Review Later", "Photos and Media", "Archive"}
+    assert role != "Work and Career"
+
+
+def test_interview_needs_job_context():
+    role, sensitivity, destination, confidence = classify_file("Cindy Interview", "application/pdf")
+    assert role != "Work and Career"
+
+
+def test_python_project_goes_to_coding():
+    role, sensitivity, destination, confidence = classify_file("Python project - news sources", "application/pdf")
+    assert role == "Projects and Coding"
+    assert destination == "07 Projects and Coding"
+
+
+def test_venturing_summit_project_not_automatically_coding():
+    role, sensitivity, destination, confidence = classify_file(
+        "Venturing Summit Project",
+        "application/pdf",
+        current_path="My Drive/Scouting/Venturing Summit Project",
+    )
+    assert role == "Scouting"
+
+
+def test_project_word_alone_not_coding():
+    role, sensitivity, destination, confidence = classify_file("23rd Amendment Project", "application/pdf")
+    assert role != "Projects and Coding"
 
 
 def test_untitled_file_with_no_useful_path_goes_to_review_later():
@@ -99,10 +188,42 @@ def test_minecraft_in_old_childhood_path_goes_to_archive_games():
     assert confidence == "High"
 
 
+def test_course_syllabus_normal_sensitivity():
+    role, sensitivity, destination, confidence = classify_file("Course Syllabus", "application/pdf")
+    assert sensitivity == "Normal"
+
+
+def test_university_of_scouting_syllabus_normal_sensitivity():
+    role, sensitivity, destination, confidence = classify_file("University of Scouting syllabus", "application/pdf")
+    assert sensitivity == "Normal"
+
+
+def test_tn_tech_class_schedule_can_be_student_information():
+    role, sensitivity, destination, confidence = classify_file("TN Tech Class Schedule", "application/pdf", current_path="My Drive/Tennessee Tech/Spring 2026")
+    assert sensitivity in {"Student Information", "School Record", "Normal"}
+
+
+def test_incident_report_sensitive():
+    role, sensitivity, destination, confidence = classify_file("Incident Report", "application/pdf")
+    assert sensitivity in {"Needs Sensitive Review", "Student Information"}
+
+
 def test_path_builder_handles_missing_parent_safely():
     current_path, note = _resolve_path({"name": "notes.docx", "parents": ["missing-parent"]}, folder_cache={})
     assert current_path == "Unknown Parent/notes.docx"
     assert note
+
+
+def test_path_builder_fetches_missing_parent_from_drive():
+    drive = FakeDriveService(
+        files={
+            "folder-2": {"id": "folder-2", "name": "Tennessee Tech", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]},
+            "folder-1": {"id": "folder-1", "name": "DS 4250", "mimeType": "application/vnd.google-apps.folder", "parents": ["folder-2"]},
+        }
+    )
+    current_path, note = _resolve_path({"name": "notes.docx", "parents": ["folder-1"]}, folder_cache={}, drive_service=drive)
+    assert current_path == "My Drive/Tennessee Tech/DS 4250/notes.docx"
+    assert note == ""
 
 
 def test_path_builder_resolves_readable_path_order():
