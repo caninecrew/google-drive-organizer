@@ -4,6 +4,7 @@ import csv
 import os
 from pathlib import Path
 
+from src.auto_approve import auto_approve_safe
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import inventory_files
@@ -790,6 +791,293 @@ def test_existing_csv_behavior_still_works(tmp_path, capsys):
     assert "total rows: 1" in captured.out
 
 
+def test_safe_row_becomes_planned_approve_move(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "application/pdf",
+                "capabilities_can_move_item_within_drive": "True",
+                "capabilities_can_add_my_drive_parent": "True",
+                "capabilities_can_remove_my_drive_parent": "True",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    assert result["approve_count"] == 1
+    assert result["needs_review_count"] == 0
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "APPROVE_MOVE"
+
+
+def test_low_confidence_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-2",
+                "name": "random note",
+                "current_path": "My Drive/Random/random note",
+                "suggested_role": "Review Later",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "99 Review Later",
+                "review_decision": "REVIEW",
+                "mime_type": "text/plain",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    assert result["needs_review_count"] == 1
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "low confidence"
+
+
+def test_sensitive_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-3",
+                "name": "tax return",
+                "current_path": "My Drive/Tax/tax return",
+                "suggested_role": "Personal",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Financial",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "01 Personal",
+                "review_decision": "REVIEW",
+                "mime_type": "application/pdf",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "non-normal sensitivity"
+
+
+def test_shortcut_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-4",
+                "name": "shortcut",
+                "current_path": "My Drive/Docs/shortcut",
+                "suggested_role": "Scouting",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "True",
+                "final_destination": "04 Scouting",
+                "review_decision": "REVIEW",
+                "mime_type": "application/vnd.google-apps.shortcut",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "shortcut"
+
+
+def test_not_owned_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-5",
+                "name": "doc.txt",
+                "current_path": "My Drive/Docs/doc.txt",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "False",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "text/plain",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "not owned by me"
+
+
+def test_unknown_parent_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-6",
+                "name": "doc.txt",
+                "current_path": "Unknown Parent/doc.txt [no parents]",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "text/plain",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "unknown parent"
+
+
+def test_untitled_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-7",
+                "name": "Untitled document",
+                "current_path": "My Drive/Docs/Untitled document",
+                "suggested_role": "Review Later",
+                "suggested_confidence": "Low",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "99 Review Later",
+                "review_decision": "REVIEW",
+                "mime_type": "application/vnd.google-apps.document",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "low confidence"
+
+
+def test_blank_final_destination_row_becomes_needs_review(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-8",
+                "name": "doc.txt",
+                "current_path": "My Drive/Docs/doc.txt",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "",
+                "review_decision": "REVIEW",
+                "mime_type": "text/plain",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    with result["plan_path"].open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["planned_review_decision"] == "NEEDS_REVIEW"
+    assert rows[0]["reason"] == "blank final_destination"
+
+
+def test_dry_run_does_not_write_to_sheets(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-9",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "application/pdf",
+            }
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), True, None)
+    assert sheets.update_calls == []
+
+
+def test_max_approve_limits_approvals(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-10",
+                "name": "Resume 1",
+                "current_path": "My Drive/Work/Resume 1",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "application/pdf",
+            },
+            {
+                "file_id": "file-11",
+                "name": "Resume 2",
+                "current_path": "My Drive/Work/Resume 2",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "application/pdf",
+            },
+        ]
+    )
+    result = auto_approve_safe(sheets, "sheet-1", str(tmp_path), False, 1)
+    assert result["approve_count"] == 1
+    assert result["updated_rows"] == 1
+    assert sheets.update_calls[0]["range"].startswith("Sheet1!")
+    assert sheets.update_calls[0]["body"]["values"][0][0] == "APPROVE_MOVE"
+
+
+def test_auto_approve_never_changes_final_destination(tmp_path):
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-12",
+                "name": "Resume 2026",
+                "current_path": "My Drive/Work/Resume 2026",
+                "suggested_role": "Work and Career",
+                "suggested_confidence": "High",
+                "suggested_sensitivity": "Normal",
+                "owned_by_me": "True",
+                "is_shortcut": "False",
+                "final_destination": "03 Work and Career",
+                "review_decision": "REVIEW",
+                "mime_type": "application/pdf",
+            }
+        ]
+    )
+    auto_approve_safe(sheets, "sheet-1", str(tmp_path), False, None)
+    assert all("final_destination" not in call["range"] for call in sheets.update_calls)
+
+
 class FakeDriveFiles:
     def __init__(self, drive):
         self.drive = drive
@@ -825,29 +1113,37 @@ class FakeDriveService:
 
 
 class FakeSheetsValues:
-    def __init__(self, rows):
+    def __init__(self, rows, service=None):
         self.rows = rows
+        self.service = service
 
     def get(self, spreadsheetId, range):
         headers = list(self.rows[0].keys()) if self.rows else []
         values = [headers] + [[row.get(header, "") for header in headers] for row in self.rows]
         return FakeExecute({"values": values})
 
+    def update(self, spreadsheetId, range, valueInputOption, body):
+        if self.service is not None:
+            self.service.update_calls.append({"spreadsheetId": spreadsheetId, "range": range, "valueInputOption": valueInputOption, "body": body})
+        return FakeExecute({"updatedRange": range, "body": body})
+
 
 class FakeSheetsSpreadsheet:
-    def __init__(self, rows):
+    def __init__(self, rows, service=None):
         self._rows = rows
+        self._service = service
 
     def values(self):
-        return FakeSheetsValues(self._rows)
+        return FakeSheetsValues(self._rows, service=self._service)
 
 
 class FakeSheetsService:
     def __init__(self, rows):
         self._rows = rows
+        self.update_calls = []
 
     def spreadsheets(self):
-        return FakeSheetsSpreadsheet(self._rows)
+        return FakeSheetsSpreadsheet(self._rows, service=self)
 
 
 class FakeActivityQuery:

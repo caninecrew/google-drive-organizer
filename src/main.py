@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .auth import get_credentials, get_drive_activity_service, get_drive_service, get_sheets_service
+from .auto_approve import auto_approve_safe
 from .config import load_config
 from .drive_inventory import inventory_files
 from .folder_setup import FOLDER_PATHS, ensure_folder_path
@@ -134,6 +135,28 @@ def cmd_summarize(args):
         print(f"summary export: {export_path}")
 
 
+def cmd_auto_approve_safe(args):
+    config = load_config()
+    creds = get_credentials()
+    sheets = get_sheets_service(creds)
+    result = auto_approve_safe(
+        sheets,
+        args.spreadsheet_id,
+        config.log_dir,
+        args.dry_run,
+        args.max_approve,
+    )
+    print("Auto-approval summary:")
+    print(f"  total rows evaluated: {result['total_rows']}")
+    print(f"  rows that would be marked APPROVE_MOVE: {result['approve_count']}")
+    print(f"  rows that would be marked NEEDS_REVIEW: {result['needs_review_count']}")
+    print(f"  rows left unchanged: {result['unchanged_count']}")
+    print("  top skip reasons:")
+    for reason, count in result["top_reasons"]:
+        print(f"    {reason}: {count}")
+    print(f"  plan CSV: {result['plan_path']}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="google-drive-organizer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -146,6 +169,10 @@ def build_parser():
     move = sub.add_parser("move-approved")
     move.add_argument("--spreadsheet-id", required=True)
     move.add_argument("--dry-run", action="store_true")
+    auto = sub.add_parser("auto-approve-safe")
+    auto.add_argument("--spreadsheet-id", required=True)
+    auto.add_argument("--dry-run", action="store_true")
+    auto.add_argument("--max-approve", type=int)
     return parser
 
 
@@ -160,6 +187,8 @@ def main():
         cmd_summarize(args)
     elif args.command == "move-approved":
         cmd_move_approved(args)
+    elif args.command == "auto-approve-safe":
+        cmd_auto_approve_safe(args)
 
 
 if __name__ == "__main__":

@@ -98,6 +98,25 @@ In the review sheet:
 - Shortcut rows are flagged explicitly. Moving a shortcut moves the shortcut entry, not necessarily the underlying target file.
 - `activity_level` stays `Unknown` when activity enrichment is disabled in config.
 
+Safe bulk approval workflow:
+
+```bash
+python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --dry-run --max-approve 10
+python -m src.main auto-approve-safe --spreadsheet-id SPREADSHEET_ID --max-approve 10
+python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
+```
+
+Recommended steps:
+
+1. Run inventory.
+2. Review the summary.
+3. Run `auto-approve-safe` with `--dry-run --max-approve 10`.
+4. Run `auto-approve-safe` with `--max-approve 10`.
+5. Run `move-approved --dry-run`.
+6. Review the move plan CSV.
+7. Run a real move only for that tiny approved batch.
+8. Increase the batch size gradually after reviewing each pass.
+
 Summarize an exported inventory CSV before moving:
 
 ```bash
