@@ -11,6 +11,7 @@ from .drive_inventory import inventory_files
 from .folder_setup import FOLDER_PATHS, ensure_folder_path
 from .move_approved import log_inventory_action, move_approved_rows
 from .sheets_review import create_review_spreadsheet
+from .summary import format_summary, load_inventory_rows, summarize_rows, write_summary_export
 
 
 def cmd_inventory(args):
@@ -103,11 +104,23 @@ def cmd_move_approved(args):
     print(f"  move plan CSV: {plan_path}")
 
 
+def cmd_summarize(args):
+    rows = load_inventory_rows(args.csv)
+    summary = summarize_rows(rows)
+    print(format_summary(summary), end="")
+    if args.export:
+        export_path = write_summary_export(summary, args.export)
+        print(f"summary export: {export_path}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="google-drive-organizer")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("inventory")
     sub.add_parser("create-folders")
+    summarize = sub.add_parser("summarize")
+    summarize.add_argument("--csv", required=True)
+    summarize.add_argument("--export")
     move = sub.add_parser("move-approved")
     move.add_argument("--spreadsheet-id", required=True)
     move.add_argument("--dry-run", action="store_true")
@@ -121,6 +134,8 @@ def main():
         cmd_inventory(args)
     elif args.command == "create-folders":
         cmd_create_folders(args)
+    elif args.command == "summarize":
+        cmd_summarize(args)
     elif args.command == "move-approved":
         cmd_move_approved(args)
 

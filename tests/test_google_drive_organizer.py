@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import csv
+from pathlib import Path
 
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import _resolve_path
 from src.move_approved import move_approved_rows
+from src.summary import build_warnings, format_summary, summarize_rows
 
 
 def test_classifier_role_matching():
@@ -324,6 +326,52 @@ def test_drive_activity_missing_fields_returns_unknown():
     service = FakeActivityService(response={"activities": [{"actions": [{"detail": {"edit": {}}}]}]})
     result = enrich_activity(service, "file-1")
     assert result == {"activity_level": "Unknown", "last_activity_time": "", "last_activity_type": ""}
+
+
+def test_summary_helpers_count_rows_and_warnings():
+    rows = [
+        {
+            "suggested_role": "Work and Career",
+            "suggested_destination": "03 Work and Career",
+            "suggested_confidence": "Low",
+            "suggested_sensitivity": "Normal",
+            "current_path": "Unknown Parent/file1 [unresolved parent]",
+            "name": "Untitled document",
+            "review_decision": "APPROVE_MOVE",
+        },
+        {
+            "suggested_role": "Review Later",
+            "suggested_destination": "99 Review Later",
+            "suggested_confidence": "Low",
+            "suggested_sensitivity": "Normal",
+            "current_path": "My Drive/School/file2",
+            "name": "Resume 2026",
+            "review_decision": "",
+        },
+    ]
+    summary = summarize_rows(rows)
+    assert summary.total_rows == 2
+    assert summary.by_role["Work and Career"] == 1
+    assert summary.by_confidence["Low"] == 2
+    assert summary.untitled_count == 1
+    assert summary.low_confidence_approve_move_count == 1
+    assert "More than 10% of rows are Work and Career." in summary.warnings
+    assert "Some Low confidence rows are marked APPROVE_MOVE." in summary.warnings
+    text = format_summary(summary)
+    assert "total rows: 2" in text
+
+
+def test_summary_build_warnings_thresholds():
+    warnings = build_warnings(
+        total_rows=10,
+        unknown_parent_count=3,
+        work_and_career_count=2,
+        untitled_count=5,
+        untitled_archive_count=1,
+        low_confidence_approve_move_count=0,
+    )
+    assert "More than 25% of rows have Unknown Parent." in warnings
+    assert "More than 10% of rows are Work and Career." in warnings
 
 
 class FakeDriveFiles:

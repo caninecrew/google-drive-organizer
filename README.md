@@ -79,6 +79,18 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 
 Every `move-approved` run writes a move plan CSV under `data/logs/` with the proposed or completed actions, including `current_path`, destination, and reason codes for skipped rows.
 
+Summarize an exported inventory CSV before moving:
+
+```bash
+python -m src.main summarize --csv data/exports/inventory_YYYY-MM-DD_HHMMSS.csv
+```
+
+Export the summary to a text or CSV file:
+
+```bash
+python -m src.main summarize --csv data/exports/inventory_YYYY-MM-DD_HHMMSS.csv --export data/logs/inventory_summary.txt
+```
+
 ## Review workflow
 
 1. Run inventory.
@@ -88,6 +100,7 @@ Every `move-approved` run writes a move plan CSV under `data/logs/` with the pro
 5. Run `move-approved` with `--dry-run` first.
 6. Review the generated move plan CSV before making any real changes.
 7. Run `move-approved` without `--dry-run` only after confirming the dry run output.
+8. Review the inventory summary for unresolved parents, low-confidence rows, and untitled files before approving moves.
 
 ## Why `current_path` matters
 
