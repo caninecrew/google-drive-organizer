@@ -1,0 +1,7 @@
+include_folders: false
+activity_enrichment: false
+allow_create_missing_destination_folders: false
+allow_move_folders: false
+review_spreadsheet_prefix: Google Drive Organizer Review
+log_dir: data/logs
+

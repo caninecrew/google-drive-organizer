@@ -1,0 +1,11 @@
+credentials.json
+token.json
+.env
+data/exports
+data/logs
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.pyc
+

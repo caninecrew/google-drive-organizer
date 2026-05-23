@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+FOLDER_PATHS = [
+    "00 Inbox",
+    "01 Personal",
+    "02 School and Education",
+    "03 Work and Career",
+    "04 Scouting",
+    "05 Church and Ministry",
+    "06 FOIA and Public Records",
+    "07 Projects and Coding",
+    "08 Photos and Media",
+    "09 Archive",
+    "99 Review Later",
+    "09 Archive/Imports/From germanshepherd999 Google Drive",
+    "09 Archive/Imports/From TTU OneDrive",
+    "09 Archive/Imports/From Personal OneDrive Cleanup",
+]
+
+
+def ensure_folder_path(drive_service, path: str, allow_create: bool):
+    parent_id = "root"
+    current_path = []
+    for part in path.split("/"):
+        current_path.append(part)
+        existing = drive_service.files().list(q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{part}' and '{parent_id}' in parents", fields="files(id, name)", spaces="drive").execute().get("files", [])
+        if existing:
+            parent_id = existing[0]["id"]
+            continue
+        if not allow_create:
+            return None
+        created = drive_service.files().create(body={"name": part, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}, fields="id").execute()
+        parent_id = created["id"]
+    return parent_id
+
