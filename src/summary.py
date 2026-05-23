@@ -27,6 +27,17 @@ def load_inventory_rows(csv_path: str | Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
+def find_latest_inventory_csv(exports_dir: str | Path = "data/exports") -> Path | None:
+    exports_path = Path(exports_dir)
+    candidates = sorted(
+        exports_path.glob("inventory_*.csv"),
+        key=lambda path: (path.stat().st_mtime, path.name),
+    )
+    if not candidates:
+        return None
+    return candidates[-1]
+
+
 def summarize_rows(rows: list[dict[str, str]]) -> SummaryResult:
     by_role = Counter()
     by_destination = Counter()

@@ -85,11 +85,25 @@ Summarize an exported inventory CSV before moving:
 python -m src.main summarize --csv data/exports/inventory_YYYY-MM-DD_HHMMSS.csv
 ```
 
+Summarize the newest inventory CSV automatically:
+
+```bash
+python -m src.main summarize --latest
+```
+
 Export the summary to a text or CSV file:
 
 ```bash
 python -m src.main summarize --csv data/exports/inventory_YYYY-MM-DD_HHMMSS.csv --export data/logs/inventory_summary.txt
 ```
+
+You can combine `--latest` with `--export`:
+
+```bash
+python -m src.main summarize --latest --export data/exports/summary_latest.txt
+```
+
+Use either `--latest` or `--csv`, not both. The command will return a clear error if both are provided.
 
 ## Review workflow
 

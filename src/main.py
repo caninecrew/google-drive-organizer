@@ -11,7 +11,7 @@ from .drive_inventory import inventory_files
 from .folder_setup import FOLDER_PATHS, ensure_folder_path
 from .move_approved import log_inventory_action, move_approved_rows
 from .sheets_review import create_review_spreadsheet
-from .summary import format_summary, load_inventory_rows, summarize_rows, write_summary_export
+from .summary import find_latest_inventory_csv, format_summary, load_inventory_rows, summarize_rows, write_summary_export
 
 
 def cmd_inventory(args):
@@ -105,7 +105,17 @@ def cmd_move_approved(args):
 
 
 def cmd_summarize(args):
-    rows = load_inventory_rows(args.csv)
+    if args.csv and args.latest:
+        raise SystemExit("Choose either --csv or --latest, not both.")
+    if args.latest:
+        latest_csv = find_latest_inventory_csv()
+        if latest_csv is None:
+            raise SystemExit("No inventory CSV files found in data/exports. Run inventory first.")
+        print(f"Selected latest inventory CSV: {latest_csv}")
+        csv_path = latest_csv
+    else:
+        csv_path = Path(args.csv)
+    rows = load_inventory_rows(csv_path)
     summary = summarize_rows(rows)
     print(format_summary(summary), end="")
     if args.export:
@@ -119,7 +129,8 @@ def build_parser():
     sub.add_parser("inventory")
     sub.add_parser("create-folders")
     summarize = sub.add_parser("summarize")
-    summarize.add_argument("--csv", required=True)
+    summarize.add_argument("--csv")
+    summarize.add_argument("--latest", action="store_true")
     summarize.add_argument("--export")
     move = sub.add_parser("move-approved")
     move.add_argument("--spreadsheet-id", required=True)

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 from src.classifier import classify_file
 from src.drive_activity import enrich_activity
 from src.drive_inventory import _resolve_path
 from src.move_approved import move_approved_rows
-from src.summary import build_warnings, format_summary, summarize_rows
+from src.summary import build_warnings, find_latest_inventory_csv, format_summary, summarize_rows
 
 
 def test_classifier_role_matching():
@@ -439,6 +440,57 @@ def test_summary_build_warnings_thresholds():
     )
     assert "More than 25% of rows have Unknown Parent." in warnings
     assert "More than 10% of rows are Work and Career." in warnings
+
+
+def test_find_latest_inventory_csv_selects_newest(tmp_path):
+    older = tmp_path / "inventory_2026-01-01_120000.csv"
+    newer = tmp_path / "inventory_2026-01-02_120000.csv"
+    older.write_text("a,b\n1,2\n", encoding="utf-8")
+    newer.write_text("a,b\n3,4\n", encoding="utf-8")
+    os.utime(older, (older.stat().st_atime, older.stat().st_mtime - 10))
+    assert find_latest_inventory_csv(tmp_path) == newer
+
+
+def test_find_latest_inventory_csv_returns_none_when_missing(tmp_path):
+    assert find_latest_inventory_csv(tmp_path) is None
+
+
+def test_summary_csv_conflict_error(tmp_path):
+    from src.main import cmd_summarize
+
+    csv_path = tmp_path / "inventory_2026-01-01_120000.csv"
+    csv_path.write_text("suggested_role\nReview Later\n", encoding="utf-8")
+
+    class Args:
+        csv = str(csv_path)
+        latest = True
+        export = None
+
+    try:
+        cmd_summarize(Args())
+        assert False, "expected SystemExit"
+    except SystemExit as exc:
+        assert "Choose either --csv or --latest" in str(exc)
+
+
+def test_existing_csv_behavior_still_works(tmp_path, capsys):
+    from src.main import cmd_summarize
+
+    csv_path = tmp_path / "inventory_2026-01-01_120000.csv"
+    csv_path.write_text(
+        "suggested_role,suggested_destination,suggested_confidence,suggested_sensitivity,current_path,name,review_decision\n"
+        "Review Later,99 Review Later,Low,Normal,My Drive/Test,Untitled,\n",
+        encoding="utf-8",
+    )
+
+    class Args:
+        csv = str(csv_path)
+        latest = False
+        export = None
+
+    cmd_summarize(Args())
+    captured = capsys.readouterr()
+    assert "total rows: 1" in captured.out
 
 
 class FakeDriveFiles:
