@@ -79,6 +79,15 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 
 Every `move-approved` run writes a move plan CSV under `data/logs/` with the proposed or completed actions, including `current_path`, destination, and reason codes for skipped rows.
 
+In the review sheet:
+
+- `review_decision` controls what action the tool may take.
+- `final_destination` controls where the file should go.
+- `suggested_destination` is only the tool's recommendation.
+- `APPROVE_MOVE` should only be used after `final_destination` is verified.
+- `review_decision` options are action/status values only.
+- `final_destination` options are folder paths only.
+
 Summarize an exported inventory CSV before moving:
 
 ```bash

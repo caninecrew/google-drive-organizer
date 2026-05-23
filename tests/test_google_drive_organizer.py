@@ -9,6 +9,7 @@ from src.drive_activity import enrich_activity
 from src.drive_inventory import _resolve_path
 from src.move_approved import move_approved_rows
 from src.summary import build_warnings, find_latest_inventory_csv, format_summary, summarize_rows
+from src.sheets_review import FINAL_DESTINATION_OPTIONS, REVIEW_DECISION_OPTIONS, _make_validation_request
 
 
 def test_classifier_role_matching():
@@ -361,6 +362,33 @@ def test_blank_destination_is_skipped():
     assert rows[0]["reason"] in {"final destination is blank", "review_decision is not APPROVE_MOVE"}
 
 
+def test_approve_move_with_blank_final_destination_is_skipped():
+    drive = FakeDriveService(
+        files={
+            "file-1": {"id": "file-1", "name": "doc.txt", "mimeType": "text/plain", "parents": ["parent-1"]},
+        }
+    )
+    sheets = FakeSheetsService(
+        rows=[
+            {
+                "file_id": "file-1",
+                "name": "doc.txt",
+                "review_decision": "APPROVE_MOVE",
+                "suggested_destination": "01 Personal",
+                "final_destination": "",
+            }
+        ]
+    )
+    results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
+    assert results == [("file-1", "skipped", "missing destination")]
+    assert drive.update_calls == []
+    assert evaluated_count == 1
+    with plan_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["outcome"] == "SKIPPED"
+    assert rows[0]["reason"] == "final destination is blank"
+
+
 def test_dry_run_produces_would_move_without_update_call():
     drive = FakeDriveService(
         files={
@@ -375,19 +403,21 @@ def test_dry_run_produces_would_move_without_update_call():
                 "name": "doc.txt",
                 "review_decision": "APPROVE_MOVE",
                 "suggested_destination": "01 Personal",
+                "final_destination": "02 School and Education",
                 "current_path": "My Drive/Docs/doc.txt",
                 "parents": "parent-1",
             }
         ]
     )
     results, plan_path, evaluated_count = move_approved_rows(drive, sheets, "sheet-1", False, False, True, "data/logs")
-    assert results == [("file-1", "would_move", "01 Personal")]
+    assert results == [("file-1", "would_move", "02 School and Education")]
     assert drive.update_calls == []
     assert evaluated_count == 1
     with plan_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["outcome"] == "WOULD_MOVE"
     assert rows[0]["current_path"] == "My Drive/Docs/doc.txt"
+    assert rows[0]["destination_path"] == "02 School and Education"
 
 
 def test_drive_activity_missing_fields_returns_unknown():
@@ -440,6 +470,25 @@ def test_summary_build_warnings_thresholds():
     )
     assert "More than 25% of rows have Unknown Parent." in warnings
     assert "More than 10% of rows are Work and Career." in warnings
+
+
+def test_review_decision_dropdown_values_do_not_include_folder_paths():
+    assert "APPROVE_MOVE" in REVIEW_DECISION_OPTIONS
+    assert all(not value.startswith("0") for value in REVIEW_DECISION_OPTIONS)
+
+
+def test_final_destination_dropdown_values_include_folder_paths():
+    assert "01 Personal" in FINAL_DESTINATION_OPTIONS
+    assert "09 Archive/Old Games and Creative Projects" in FINAL_DESTINATION_OPTIONS
+
+
+def test_validation_request_targets_correct_columns():
+    review_req = _make_validation_request(1, 17, REVIEW_DECISION_OPTIONS)
+    final_req = _make_validation_request(1, 18, FINAL_DESTINATION_OPTIONS)
+    assert review_req["setDataValidation"]["range"]["startColumnIndex"] == 17
+    assert review_req["setDataValidation"]["range"]["endColumnIndex"] == 18
+    assert final_req["setDataValidation"]["range"]["startColumnIndex"] == 18
+    assert final_req["setDataValidation"]["range"]["endColumnIndex"] == 19
 
 
 def test_find_latest_inventory_csv_selects_newest(tmp_path):

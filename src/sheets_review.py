@@ -4,6 +4,17 @@ from datetime import datetime
 
 from .classifier import review_destination_options
 
+REVIEW_DECISION_OPTIONS = [
+    "REVIEW",
+    "APPROVE_MOVE",
+    "APPROVE_ARCHIVE",
+    "SKIP",
+    "NEEDS_REVIEW",
+    "DELETE_LATER",
+]
+
+FINAL_DESTINATION_OPTIONS = review_destination_options()
+
 HEADER_ROW = [
     "file_id",
     "name",
@@ -39,34 +50,43 @@ def create_review_spreadsheet(sheets_service, title_prefix: str, rows):
         valueInputOption="RAW",
         body={"values": values},
     ).execute()
-    _apply_destination_validation(sheets_service, spreadsheet_id)
+    _apply_review_dropdown_validation(sheets_service, spreadsheet_id)
     return spreadsheet_id, title
 
 
-def _apply_destination_validation(sheets_service, spreadsheet_id: str):
+def _make_validation_request(sheet_id: int, column_index: int, values: list[str]) -> dict:
+    return {
+        "setDataValidation": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 1,
+                "endRowIndex": 10000,
+                "startColumnIndex": column_index,
+                "endColumnIndex": column_index + 1,
+            },
+            "rule": {
+                "condition": {
+                    "type": "ONE_OF_LIST",
+                    "values": [{"userEnteredValue": value} for value in values],
+                },
+                "showCustomUi": True,
+                "strict": False,
+            },
+        }
+    }
+
+
+def _apply_review_dropdown_validation(sheets_service, spreadsheet_id: str):
     try:
         sheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
         sheet_id = sheet["sheets"][0]["properties"]["sheetId"]
         request = {
             "requests": [
                 {
-                    "setDataValidation": {
-                        "range": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": 1,
-                            "endRowIndex": 10000,
-                            "startColumnIndex": 17,
-                            "endColumnIndex": 18,
-                        },
-                        "rule": {
-                            "condition": {
-                                "type": "ONE_OF_LIST",
-                                "values": [{"userEnteredValue": value} for value in review_destination_options()],
-                            },
-                            "showCustomUi": True,
-                            "strict": False,
-                        },
-                    }
+                    **_make_validation_request(sheet_id, 17, REVIEW_DECISION_OPTIONS),
+                },
+                {
+                    **_make_validation_request(sheet_id, 18, FINAL_DESTINATION_OPTIONS),
                 }
             ]
         }

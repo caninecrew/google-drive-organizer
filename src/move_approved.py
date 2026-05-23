@@ -125,6 +125,21 @@ def move_approved_rows(drive_service, sheets_service, spreadsheet_id: str, allow
             results.append((file_id, "skipped", "missing file_id"))
             continue
         destination = row.get("final_destination") or row.get("suggested_destination") or ""
+        if row.get("review_decision", "") == "APPROVE_MOVE" and not row.get("final_destination", ""):
+            _write_move_plan_row(
+                plan_path,
+                mode="DRY_RUN" if dry_run else "LIVE",
+                outcome="SKIPPED",
+                reason="final destination is blank",
+                file_id=file_id,
+                name=row.get("name", ""),
+                current_path=row.get("current_path", ""),
+                original_parents=row.get("parents", ""),
+                destination_path="",
+                destination_folder_id="",
+            )
+            results.append((file_id, "skipped", "missing destination"))
+            continue
         if not destination:
             _write_move_plan_row(
                 plan_path,
