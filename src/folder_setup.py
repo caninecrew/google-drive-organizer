@@ -20,16 +20,34 @@ FOLDER_PATHS = [
 
 def ensure_folder_path(drive_service, path: str, allow_create: bool):
     parent_id = "root"
-    current_path = []
     for part in path.split("/"):
-        current_path.append(part)
-        existing = drive_service.files().list(q=f"trashed = false and mimeType = 'application/vnd.google-apps.folder' and name = '{part}' and '{parent_id}' in parents", fields="files(id, name)", spaces="drive").execute().get("files", [])
+        safe_part = part.replace("'", "\\'")
+        query = (
+            "trashed = false and mimeType = 'application/vnd.google-apps.folder' "
+            f"and name = '{safe_part}' and '{parent_id}' in parents"
+        )
+        existing = (
+            drive_service.files()
+            .list(q=query, fields="files(id, name)", spaces="drive")
+            .execute()
+            .get("files", [])
+        )
         if existing:
             parent_id = existing[0]["id"]
             continue
         if not allow_create:
             return None
-        created = drive_service.files().create(body={"name": part, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}, fields="id").execute()
+        created = (
+            drive_service.files()
+            .create(
+                body={
+                    "name": part,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": [parent_id],
+                },
+                fields="id",
+            )
+            .execute()
+        )
         parent_id = created["id"]
     return parent_id
-

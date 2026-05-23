@@ -22,8 +22,37 @@ def cmd_inventory(args):
     log_path = Path(config.log_dir) / f"inventory_log_{datetime.now().strftime('%Y-%m-%d')}.csv"
     rows = inventory_files(drive, activity, include_folders=config.include_folders, activity_enrichment=config.activity_enrichment)
     spreadsheet_id, title = create_review_spreadsheet(sheets, config.review_spreadsheet_prefix, rows)
+    export_dir = Path("data/exports")
+    export_dir.mkdir(parents=True, exist_ok=True)
+    export_path = export_dir / f"inventory_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.csv"
+    with export_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        header = [
+            "file_id",
+            "name",
+            "mime_type",
+            "parents",
+            "created_time",
+            "modified_time",
+            "owners",
+            "size",
+            "web_view_link",
+            "suggested_role",
+            "suggested_sensitivity",
+            "suggested_destination",
+            "activity_level",
+            "last_activity_time",
+            "last_activity_type",
+            "review_decision",
+            "final_destination",
+            "notes",
+        ]
+        writer.writerow(header)
+        for row in rows:
+            writer.writerow([getattr(row, column) for column in header])
     log_inventory_action(log_path, "inventory", "success", f"Created spreadsheet {spreadsheet_id}")
     print(f"Created review spreadsheet: {title} ({spreadsheet_id})")
+    print(f"Inventory CSV exported to: {export_path}")
     print("Inventory only. No files moved.")
 
 
@@ -50,7 +79,26 @@ def cmd_move_approved(args):
         args.dry_run,
         config.log_dir,
     )
-    print(f"Processed {len(results)} approved rows.")
+    summary = {"would_move": 0, "moved": 0, "skipped": 0, "error": 0}
+    for _file_id, status, detail in results:
+        if status == "would_move":
+            summary["would_move"] += 1
+            print(f"WOULD_MOVE: {_file_id} -> {detail}")
+        elif status == "moved":
+            summary["moved"] += 1
+            print(f"MOVED: {_file_id} -> {detail}")
+        elif status in summary:
+            summary[status] += 1
+            print(f"{status.upper()}: {_file_id} -> {detail}")
+        else:
+            print(f"{status.upper()}: {_file_id} -> {detail}")
+    print(
+        "Move summary: "
+        f"{summary['would_move']} would move, "
+        f"{summary['moved']} moved, "
+        f"{summary['skipped']} skipped, "
+        f"{summary['error']} errors."
+    )
 
 
 def build_parser():

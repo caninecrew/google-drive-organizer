@@ -65,6 +65,15 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 5. Run `move-approved` with `--dry-run` first.
 6. Run `move-approved` without `--dry-run` only after confirming the dry run output.
 
+## First Real Run Checklist
+
+1. Verify `credentials.json` is present in the project root.
+2. Run the test suite.
+3. Run inventory first.
+4. Review the generated Google Sheet carefully.
+5. Run `move-approved --dry-run` before any real move.
+6. Only run `move-approved` without `--dry-run` after the dry run matches your intent.
+
 ## Safety rules
 
 - Inventory is the default behavior.
@@ -74,4 +83,4 @@ python -m src.main move-approved --spreadsheet-id SPREADSHEET_ID --dry-run
 - Move operations support dry run mode.
 - Every attempted action is logged to a local CSV file.
 - Drive Labels are not required.
-
+- Do not run this tool first on your whole Drive with moves enabled.
